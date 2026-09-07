@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KERYA MAIZE SYSTEM</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <!-- SheetJS — Excel (.xlsx) export on the Reports screen -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <!-- Supabase JS v2 (must come first — defines window.supabase) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- Kerya Supabase integration (load order matters) -->
+  <script src="src/supabaseClient.js"></script>
+  <script src="src/auth.js"></script>
+  <script src="src/db.js"></script>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════
+     LOGIN SCREEN
+═══════════════════════════════════════════════════════ -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">
+      <img src="kerya_maize_logo.png" alt="Kerya Maize" class="login-logo-icon">
+      <div>
+        <h1>KERYA MAIZE</h1>
+        <span>Management System v2.0</span>
+      </div>
+    </div>
+    <p class="login-subtitle">Sign in to access your dashboard</p>
+
+    <div id="loginError" class="login-error">⚠ Invalid credentials. Please try again.</div>
+
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="loginUsername" placeholder="Enter username" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="loginPassword" placeholder="Enter password">
+    </div>
+    <button class="btn-primary" onclick="loginUser(document.getElementById('loginUsername').value.trim(), document.getElementById('loginPassword').value)">Sign In →</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     MAIN APP SHELL
+═══════════════════════════════════════════════════════ -->
+<div id="appShell">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <img src="kerya_maize_logo.png" alt="Kerya Maize" class="sidebar-logo-icon">
+      <div>
+        <h1>KERYA MAIZE</h1>
+        <span>Management System</span>
+      </div>
+    </div>
+    <div class="user-badge">
+      <div class="name" id="sidebarUserName">—</div>
+      <div id="sidebarRoleTag" class="role-tag">—</div>
+      <div style="font-size:0.72rem;color:rgba(255,255,255,0.4);margin-top:4px;" id="sidebarBranch">—</div>
+    </div>
+    <div class="nav-section" id="navMenu"></div>
+    <div class="sidebar-footer">
+      <button class="btn-logout" style="margin-bottom:8px;background:rgba(255,255,255,0.08)" onclick="openChangePasswordModal()">Change my password</button>
+      <button class="btn-logout" onclick="logoutUser()">⬤ Sign Out</button>
+    </div>
+  </nav>
+
+  <!-- Dimmed backdrop behind the mobile nav drawer -->
+  <div id="navScrim" onclick="closeMobileNav()"></div>
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <button class="nav-toggle" id="navToggle" onclick="toggleMobileNav()"
+            aria-label="Menu" aria-expanded="false" aria-controls="sidebar">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="topbar-title" id="topbarTitle">Dashboard</div>
+    <div class="topbar-right">
+      <span class="branch-tag" id="topbarBranch">—</span>
+      <span class="datetime-display" id="topbarClock">—</span>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <main class="main-content">
+
+    <!-- ──── DASHBOARD VIEW ──── -->
+    <div id="view-dashboard" class="view">
+      <div class="page-header">
+        <h2 id="dashGreeting">Welcome</h2>
+        <p id="dashSubtitle">Here's your operational overview</p>
+      </div>
+      <div class="stat-grid" id="dashStats"></div>
+      <div class="two-col">
+        <div class="card">
+          <div class="card-header"><h3>📈 Sales (Last 7 Days)</h3></div>
+          <div class="card-body"><div class="chart-wrap"><canvas id="salesChart"></canvas></div></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h3>🏭 Production Summary</h3></div>
+          <div class="card-body"><div class="chart-wrap"><canvas id="prodChart"></canvas></div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3>🕒 Recent Activity</h3></div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table" id="recentActivityTable">
+              <thead><tr><th>Time</th><th>Action</th><th>Details</th><th>Branch</th><th>By</th></tr></thead>
+              <tbody id="recentActivityBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──── PURCHASE VIEW ──── -->
+    <div id="view-purchase" class="view">
+      <div class="page-header">
+        <h2>📦 Record Maize Purchase</h2>
+        <p>Log incoming maize from suppliers</p>
+      </div>
+
+      <!-- SUMMARY STATS ON TOP -->
+      <div class="stat-grid" id="purchaseSummaryPanel">
+        <div class="stat-card green">
+          <div class="label">Total Purchased Today</div>
+          <div class="value" id="sumPurchaseToday">0 kg</div>
+          <div class="icon-bg">📦</div>
+        </div>
+        <div class="stat-card amber">
+          <div class="label">Total Cost Today (RWF)</div>
+          <div class="value" id="sumCostToday">0</div>
+          <div class="icon-bg">💰</div>
+        </div>
+      </div>
+
+      <!-- FULL-WIDTH FORM BELOW -->
+      <div class="card">
+        <div class="card-header"><h3>New Purchase Entry</h3></div>
+        <div class="card-body">
+          <div class="form-grid cols-3">
+            <div class="form-field">
+              <label>Supplier Name</label>
+              <input type="text" id="f_supplier" placeholder="Full name">
+            </div>
+            <div class="form-field">
+              <label>Phone <span style="color:var(--red-500)">*</span></label>
+              <input type="tel" id="f_supplierPhone" placeholder="+250 7xx xxx xxx">
+            </div>
+            <div class="form-field">
+              <label>TIN Number</label>
+              <input type="text" id="f_supplierTIN" placeholder="Optional">
+            </div>
+            <div class="form-field">
+              <label>Entry Date & Time</label>
+              <input type="datetime-local" id="f_entryTime">
+            </div>
+            <div class="form-field">
+              <label>Quantity (kg) <span style="color:var(--red-500)">*</span></label>
+              <input type="number" id="f_quantity" placeholder="0" min="1" step="1">
+              <span class="hint">Gross weight as delivered, before waste</span>
+            </div>
+            <div class="form-field">
+              <label>Price per kg (RWF) <span style="color:var(--red-500)">*</span></label>
+              <input type="number" id="f_price" placeholder="0" min="0" step="1">
+            </div>
+            <div class="form-field">
+              <label>Waste / Dirt Removed (kg)</label>
+              <input type="number" id="f_dirtRemoved" placeholder="0" min="0" step="1">
+              <span class="hint">Deducted to give the cleaned maize weight</span>
+            </div>
+            <div class="form-field">
+              <label>Cleaned Maize (kg)</label>
+              <input type="text" id="f_finalPreview" value="—" readonly
+                     style="background:var(--gray-100);font-weight:600">
+              <span class="hint">Quantity minus waste — this is what enters stock</span>
+            </div>
+            <!-- Only branches with a mill can buy maize — elsewhere the
+                 maize could never be used. Populated from the branches
+                 table; hidden entirely when there is only one. -->
+            <div class="form-field" id="f_branchWrap" style="display:none">
+              <label>Branch</label>
+              <select id="f_branch"></select>
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-green" onclick="addPurchase()">✓ Add Purchase</button>
+            <button class="btn btn-outline" onclick="clearPurchaseForm()">✕ Clear</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h3>Purchase Records</h3>
+          <button class="btn btn-sm btn-outline" onclick="exportTable('purchaseRecords','purchases.csv')">⬇ Export CSV</button>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Supplier</th><th>Phone</th><th>TIN</th><th>Qty (kg)</th><th>Price/U</th><th>Dirt (kg)</th><th>Final Qty</th><th>Total (RWF)</th><th>Branch</th><th>Entry Time</th><th class="admin-only">Actions</th></tr></thead>
+              <tbody id="purchaseRecords"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──── PRODUCTION VIEW ──── -->
+    <div id="view-production" class="view">
+      <div class="page-header">
+        <h2>⚙️ Record Production</h2>
+        <p>Main branch milling — Semoule or Ordinaire, one product per run</p>
+      </div>
+
+      <!-- DYNAMIC SUMMARY STAT CARDS (rendered by JS) -->
+      <div class="stat-grid" id="productionSummaryGrid"></div>
+
+      <!-- FULL-WIDTH FORM -->
+      <div class="card">
+        <div class="card-header"><h3>New Production Entry</h3></div>
+        <div class="card-body">
+
+          <!-- STEP 1 — which product is being milled -->
+          <div class="prod-section-label">Step 1 — What are you producing?</div>
+          <div class="product-choice" id="p_productChoice">
+            <button type="button" class="product-option" data-product="Semoule"
+                    onclick="selectProductType('Semoule')">
+              <span class="product-option-icon">🌾</span>
+              <span class="product-option-name">Semoule</span>
+              <span class="product-option-desc">Refined. Produces bran as a by-product.</span>
+            </button>
+            <button type="button" class="product-option" data-product="Ordinaire"
+                    onclick="selectProductType('Ordinaire')">
+              <span class="product-option-icon">🌽</span>
+              <span class="product-option-name">Ordinaire</span>
+              <span class="product-option-desc">A mixture of everything. No bran, no processing rate.</span>
+            </button>
+          </div>
+
+          <!-- Everything below stays hidden until a product is chosen -->
+          <div id="p_formBody" style="display:none">
+
+            <div class="divider"></div>
+
+            <div class="prod-section-label">Step 2 — Input</div>
+            <div class="form-grid cols-3">
+              <div class="form-field">
+                <label>Maize Processed (kg) <span style="color:var(--red-500)">*</span></label>
+                <input type="number" id="p_maizeProcessed" placeholder="0" min="1" step="1">
+                <span class="hint" id="p_stockHint">Drawn from cleaned maize stock at Main</span>
+              </div>
+              <div class="form-field">
+                <label>Production Date &amp; Time</label>
+                <input type="datetime-local" id="p_time">
+              </div>
+              <div class="form-field" id="p_branchWrap" style="display:none">
+                <label>Branch</label>
+                <select id="p_branch" onchange="updateProductionPreview()"></select>
+              </div>
+              <div class="form-field" id="p_rateWrap">
+                <label>Processing Rate</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <input type="number" id="p_rate" value="68" min="1" max="100" step="0.1" style="flex:1">
+                  <span style="font-weight:600;color:var(--gray-500)">%</span>
+                </div>
+                <span class="hint">68% semoule, 32% bran. Change it if the run differs.</span>
+              </div>
+            </div>
+
+            <!-- Auto-calculated yield -->
+            <div class="yield-panel" id="p_yieldPanel">
+              <div class="yield-title">Calculated Output</div>
+              <div class="yield-row">
+                <div class="yield-item">
+                  <span class="yield-label" id="p_outputLabel">Semoule</span>
+                  <span class="yield-value" id="p_outputKg">0 kg</span>
+                </div>
+                <div class="yield-item" id="p_branItem">
+                  <span class="yield-label">Bran</span>
+                  <span class="yield-value" id="p_branKg">0 kg</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <!-- STEP 3 — sacks, rendered per product by JS -->
+            <div class="prod-section-label" id="p_sackLabel">Step 3 — Sacks packed</div>
+            <div class="form-grid cols-3" id="p_sackInputs"></div>
+
+            <div id="p_sackReconcile" class="reconcile-panel"></div>
+
+            <div class="divider"></div>
+
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-green" onclick="addProduction()">✓ Add Production Record</button>
+              <button class="btn btn-outline" onclick="resetProductionForm()">✕ Clear</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RECORDS TABLE -->
+      <div class="card">
+        <div class="card-header">
+          <h3>Production Records</h3>
+          <button class="btn btn-sm btn-outline" onclick="exportTable('productionRecords','production.csv')">⬇ Export CSV</button>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Maize In (kg)</th>
+                  <th>Rate</th>
+                  <th>Output (kg)</th>
+                  <th>Bran (kg)</th>
+                  <th>Sacks Packed</th>
+                  <th>Time</th>
+                  <th class="admin-only">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="productionRecords"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──── SALES VIEW ──── -->
+    <div id="view-sales" class="view">
+      <div class="page-header">
+        <h2>💰 Record Sale</h2>
+        <p>Log customer payments and product sales</p>
+      </div>
+
+      <!-- SUMMARY STATS ON TOP -->
+      <div class="stat-grid">
+        <div class="stat-card amber">
+          <div class="label">Revenue Today</div>
+          <div class="value" id="sumRevenueToday">0</div>
+          <div class="sub">RWF</div>
+          <div class="icon-bg">💰</div>
+        </div>
+        <div class="stat-card green">
+          <div class="label">Units Sold Today</div>
+          <div class="value" id="sumUnitsSoldToday">0 kg</div>
+          <div class="icon-bg">📦</div>
+        </div>
+      </div>
+
+      <!-- FULL-WIDTH FORM BELOW -->
+      <div class="card">
+        <div class="card-header"><h3>New Sale Entry</h3></div>
+        <div class="card-body">
+          <div class="form-grid cols-3">
+            <div class="form-field">
+              <label>Customer Name</label>
+              <input type="text" id="s_customer" placeholder="Full name">
+            </div>
+            <div class="form-field">
+              <label>Customer Phone <span style="color:var(--red-500)">*</span></label>
+              <input type="tel" id="s_phone" placeholder="+250 7xx xxx xxx">
+            </div>
+            <div class="form-field" id="s_branchWrap" style="display:none">
+              <label>Branch</label>
+              <!-- populated from the branches table -->
+              <select id="s_branch" onchange="onSaleBranchChange()"></select>
+            </div>
+            <div class="form-field">
+              <label>Product <span style="color:var(--red-500)">*</span></label>
+              <!-- options are rendered by JS: Rusizi only stocks Semoule
+                   and Ordinaire, so the list depends on the branch -->
+              <select id="s_product" onchange="onSaleProductChange()"></select>
+            </div>
+            <div class="form-field">
+              <label>Sale Date &amp; Time</label>
+              <input type="datetime-local" id="s_time">
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <!-- ── Sacked products: Semoule / Ordinaire ── -->
+          <div id="s_sackMode" style="display:none">
+            <div class="prod-section-label">Sacks sold</div>
+            <div class="form-grid cols-3">
+              <div class="form-field">
+                <label>Sack Size <span style="color:var(--red-500)">*</span></label>
+                <select id="s_sackSize" onchange="onSaleSackSizeChange()"></select>
+                <span class="hint" id="s_sackStockHint">—</span>
+              </div>
+              <div class="form-field">
+                <label>Number of Sacks <span style="color:var(--red-500)">*</span></label>
+                <input type="number" id="s_sackCount" placeholder="0" min="1" step="1"
+                       oninput="updateSalePreview()">
+              </div>
+              <div class="form-field">
+                <label>Price per Sack (RWF) <span style="color:var(--red-500)">*</span></label>
+                <input type="number" id="s_pricePerSack" placeholder="0" min="0" step="1"
+                       oninput="updateSalePreview()">
+                <span class="hint">Prices change — enter today's price</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Bulk products: Bran / Cleaned Maize ── -->
+          <div id="s_kgMode" style="display:none">
+            <div class="prod-section-label">Quantity sold</div>
+            <div class="form-grid cols-3">
+              <div class="form-field">
+                <label>Quantity (kg) <span style="color:var(--red-500)">*</span></label>
+                <input type="number" id="s_qty" placeholder="0" min="1" step="1"
+                       oninput="updateSalePreview()">
+                <span class="hint" id="s_kgStockHint">—</span>
+              </div>
+              <div class="form-field">
+                <label>Price per kg (RWF) <span style="color:var(--red-500)">*</span></label>
+                <input type="number" id="s_price" placeholder="0" min="0" step="1"
+                       oninput="updateSalePreview()">
+                <span class="hint">Prices change — enter today's price</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+          <div style="padding:14px;background:var(--green-50);border-radius:8px;margin-bottom:16px;max-width:340px">
+            <div style="font-size:0.78rem;color:var(--gray-500)">TOTAL AMOUNT</div>
+            <div style="font-family:'Syne',sans-serif;font-size:1.8rem;font-weight:800;color:var(--green-700)" id="saleTotalPreview">RWF 0</div>
+            <div style="font-size:0.8rem;color:var(--gray-500)" id="saleQtyPreview"></div>
+          </div>
+          <button class="btn btn-green" onclick="addSale()">✓ Record Sale</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h3>Sales Records</h3>
+          <button class="btn btn-sm btn-outline" onclick="exportTable('salesRecords','sales.csv')">⬇ Export CSV</button>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Customer</th><th>Phone</th><th>Product</th><th>Sacks</th><th>Qty (kg)</th><th>Unit Price</th><th>Total (RWF)</th><th>Branch</th><th>Time</th><th class="admin-only">Actions</th></tr></thead>
+              <tbody id="salesRecords"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──── REPORTS VIEW ──── -->
+    <div id="view-reports" class="view">
+      <div class="page-header">
+        <h2>📄 Reports</h2>
+        <p>Generate weekly and branch-level reports</p>
+      </div>
+      <div class="card no-print">
+        <div class="card-header"><h3>Report Generator</h3></div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="form-field">
+              <label>Report Type</label>
+              <select id="rpt_type">
+                <option value="full">Full Summary</option>
+                <option value="purchase">Purchase Report</option>
+                <option value="production">Production Report</option>
+                <option value="sales">Sales Report</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Branch Filter</label>
+              <!-- populated from the branches table -->
+              <select id="rpt_branch"></select>
+            </div>
+            <div class="form-field">
+              <label>Period</label>
+              <select id="rpt_period" onchange="onReportPeriodChange()">
+                <option value="all">All time</option>
+                <option value="month">Monthly</option>
+                <option value="quarter">Quarterly</option>
+                <option value="year">Yearly</option>
+                <option value="custom">Custom range</option>
+              </select>
+            </div>
+            <div class="form-field" id="rpt_yearWrap" style="display:none">
+              <label>Year</label>
+              <select id="rpt_year"></select>
+            </div>
+            <div class="form-field" id="rpt_quarterWrap" style="display:none">
+              <label>Quarter</label>
+              <select id="rpt_quarter">
+                <option value="1">Q1 — Jan to Mar</option>
+                <option value="2">Q2 — Apr to Jun</option>
+                <option value="3">Q3 — Jul to Sep</option>
+                <option value="4">Q4 — Oct to Dec</option>
+              </select>
+            </div>
+            <div class="form-field" id="rpt_monthWrap" style="display:none">
+              <label>Month</label>
+              <select id="rpt_month"></select>
+            </div>
+            <div class="form-field" id="rpt_fromWrap" style="display:none">
+              <label>From</label>
+              <input type="date" id="rpt_from">
+            </div>
+            <div class="form-field" id="rpt_toWrap" style="display:none">
+              <label>To</label>
+              <input type="date" id="rpt_to">
+              <span class="hint">Inclusive — the whole of this day is counted</span>
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-green" onclick="generateReport()">📊 Generate</button>
+            <button class="btn btn-amber" onclick="downloadReportPDF()">⬇ PDF</button>
+            <button class="btn btn-outline" onclick="downloadReportExcel()">⬇ Excel</button>
+          </div>
+        </div>
+      </div>
+      <div id="reportContent"></div>
+    </div>
+
+    <!-- ──── ANALYTICS VIEW ──── -->
+    <div id="view-analytics" class="view">
+      <div class="page-header">
+        <h2>📊 Analytics</h2>
+        <p>Cross-branch performance insights</p>
+      </div>
+      <div class="stat-grid" id="analyticsStats"></div>
+
+      <!-- Two charts removed as having nothing to say yet:
+           "Production Efficiency" repeated the dashboard's Production
+           Summary doughnut exactly, and "Weekly Trend" needs months of
+           history before its line means anything — the dashboard's
+           7-day sales chart already covers recent activity.
+           Both are easy to restore; see SECURITY.md. -->
+      <div class="card">
+        <div class="card-header"><h3>Revenue by Branch</h3></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="branchRevenueChart"></canvas></div></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3>Revenue by Product</h3></div>
+        <div class="card-body"><div class="chart-wrap"><canvas id="productChart"></canvas></div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>Branch Summary</h3></div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Branch</th><th>Type</th><th>Sales</th><th>Quantity Sold</th><th>Revenue (RWF)</th></tr></thead>
+              <tbody id="branchSummaryBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──── USERS ADMIN VIEW ──── -->
+    <div id="view-users" class="view">
+      <div class="page-header">
+        <h2>👥 User Management</h2>
+        <p>Manage system users, roles, and permissions</p>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h3>System Users</h3>
+          <button class="btn btn-green btn-sm" onclick="openAddUserModal()">+ Add User</button>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Branch</th><th>Status</th><th>Actions</th><th class="admin-only">Password</th></tr></thead>
+              <tbody id="usersTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──── INVENTORY VIEW ──── -->
+    <div id="view-inventory" class="view">
+      <div class="page-header">
+        <h2>🏭 Inventory</h2>
+        <p>Current stock levels across branches</p>
+      </div>
+
+      <!-- One card per branch, rendered by JS from the branches table.
+           A producing branch also shows bulk stock (cleaned maize, bran);
+           a depot shows sacks only. -->
+      <div id="inventoryPanels"></div>
+      <div id="transitNote"></div>
+    </div>
+
+    <!-- ──── TRANSFERS VIEW ──── -->
+    <div id="view-transfers" class="view">
+      <div class="page-header">
+        <h2>🚚 Branch Transfers</h2>
+        <p>The sending branch dispatches stock; the receiving branch confirms what actually arrived</p>
+      </div>
+
+      <!-- Dispatch form — only shown to users who can send from a branch -->
+      <div class="card" id="dispatchCard">
+        <div class="card-header"><h3>New Dispatch</h3></div>
+        <div class="card-body">
+          <div class="form-grid cols-3">
+            <div class="form-field">
+              <label>From <span style="color:var(--red-500)">*</span></label>
+              <select id="t_fromBranch" onchange="onTransferSizeChange()"></select>
+            </div>
+            <div class="form-field">
+              <label>To <span style="color:var(--red-500)">*</span></label>
+              <select id="t_toBranch"></select>
+            </div>
+            <div class="form-field">
+              <label>Product <span style="color:var(--red-500)">*</span></label>
+              <select id="t_product" onchange="onTransferProductChange()">
+                <option value="Semoule">Semoule</option>
+                <option value="Ordinaire">Ordinaire</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Sack Size <span style="color:var(--red-500)">*</span></label>
+              <select id="t_sackSize" onchange="onTransferSizeChange()"></select>
+              <span class="hint" id="t_stockHint">—</span>
+            </div>
+            <div class="form-field">
+              <label>Sacks to Send <span style="color:var(--red-500)">*</span></label>
+              <input type="number" id="t_sacks" placeholder="0" min="1" step="1">
+            </div>
+            <div class="form-field">
+              <label>Dispatch Date &amp; Time</label>
+              <input type="datetime-local" id="t_time">
+            </div>
+            <div class="form-field" style="grid-column:span 2">
+              <label>Note</label>
+              <input type="text" id="t_note" placeholder="Vehicle, driver, reference…">
+            </div>
+          </div>
+          <div class="divider"></div>
+          <button class="btn btn-green" onclick="addTransfer()">🚚 Record Dispatch</button>
+          <span class="hint" style="margin-left:10px">Leaves the sending branch immediately. The receiving branch confirms separately.</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>Awaiting Confirmation</h3></div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Dispatched</th><th>Route</th><th>Product</th><th>Size</th><th>Sacks Sent</th><th>Note</th><th>Action</th></tr></thead>
+              <tbody id="pendingTransfers"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>Transfer History</h3>
+          <button class="btn btn-sm btn-outline" onclick="exportTable('transferHistory','transfers.csv')">⬇ Export CSV</button>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Dispatched</th><th>Route</th><th>Product</th><th>Size</th><th>Sent</th><th>Received</th><th>Variance</th><th>Status</th><th>Confirmed</th><th class="admin-only">Actions</th></tr></thead>
+              <tbody id="transferHistory"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──── LOGS VIEW (admin / manager) ──── -->
+    <div id="view-logs" class="view">
+      <div class="page-header">
+        <h2>🧾 Activity Log</h2>
+        <p>Everything that happens in the system, so anything that goes wrong can be traced</p>
+      </div>
+
+      <div class="stat-grid" id="logStats"></div>
+
+      <div class="card no-print">
+        <div class="card-header"><h3>Filter</h3></div>
+        <div class="card-body">
+          <div class="form-grid cols-3">
+            <div class="form-field">
+              <label>Period</label>
+              <select id="log_period" onchange="loadLogsView()">
+                <option value="1">Last 24 hours</option>
+                <option value="7" selected>Last 7 days</option>
+                <option value="30">Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="0">All time</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Severity</label>
+              <select id="log_severity" onchange="loadLogsView()">
+                <option value="">All</option>
+                <option value="info">Routine</option>
+                <option value="warning">Notable</option>
+                <option value="critical">Critical</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Branch</label>
+              <select id="log_branch" onchange="loadLogsView()"></select>
+            </div>
+            <div class="form-field">
+              <label>User</label>
+              <select id="log_user" onchange="loadLogsView()"></select>
+            </div>
+            <div class="form-field" style="grid-column:span 2">
+              <label>Search</label>
+              <input type="text" id="log_search" placeholder="Action or details…"
+                     oninput="debouncedLogSearch()">
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn btn-green" onclick="loadLogsView()">⟳ Refresh</button>
+            <button class="btn btn-outline" onclick="exportTable('logsTableBody','activity-log.csv')">⬇ Export CSV</button>
+            <button class="btn btn-outline" onclick="resetLogFilters()">✕ Clear filters</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>Entries</h3>
+          <span class="hint" style="margin:0" id="logCount">—</span>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>When</th><th>Severity</th><th>Action</th><th>Details</th><th>Branch</th><th>By</th></tr></thead>
+              <tbody id="logsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──── BRANCHES VIEW (admin) ──── -->
+    <div id="view-branches" class="view">
+      <div class="page-header">
+        <h2>🏢 Branches</h2>
+        <p>Open a new branch, or close one that is no longer trading</p>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>Open a New Branch</h3></div>
+        <div class="card-body">
+          <div class="form-grid cols-3">
+            <div class="form-field">
+              <label>Branch Name <span style="color:var(--red-500)">*</span></label>
+              <input type="text" id="nb_name" placeholder="e.g. Karongi">
+              <span class="hint">Must be unique. Cannot be "All".</span>
+            </div>
+            <div class="form-field">
+              <label>Branch Type</label>
+              <select id="nb_canProduce">
+                <option value="false">Sales depot — receives transfers, sells sacks</option>
+                <option value="true">Production site — buys maize, mills, dispatches</option>
+              </select>
+              <span class="hint">A depot cannot buy maize or mill; it sells Semoule and Ordinaire only.</span>
+            </div>
+          </div>
+          <div class="divider"></div>
+          <button class="btn btn-green" onclick="addBranch()">🏢 Open Branch</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h3>All Branches</h3></div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Branch</th><th>Type</th><th>Status</th><th>Stock Summary</th><th>Actions</th></tr></thead>
+              <tbody id="branchesTableBody"></tbody>
+            </table>
+          </div>
+          <div class="reconcile-panel warn" style="display:block;margin-top:14px">
+            Branches are never deleted — a closed branch keeps its history so past
+            records stay meaningful. Closing one only stops new entries against it.
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ─── ADD USER MODAL ─── -->
+<div class="modal-overlay" id="addUserModal">
+  <div class="modal-box">
+    <h3>➕ Add New User</h3>
+    <div class="form-grid">
+      <div class="form-field">
+        <label>Full Name</label>
+        <input type="text" id="nu_name" placeholder="Full name">
+      </div>
+      <div class="form-field">
+        <label>Username</label>
+        <input type="text" id="nu_username" placeholder="username">
+      </div>
+      <div class="form-field">
+        <label>Password</label>
+        <input type="password" id="nu_password" placeholder="Password">
+      </div>
+      <div class="form-field">
+        <label>Role</label>
+        <select id="nu_role">
+          <option value="staff">Staff</option>
+          <option value="manager">Manager</option>
+          <option value="stakeholder">Stakeholder</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+      <div class="form-field full">
+        <label>Branch</label>
+        <!-- populated from the branches table -->
+        <select id="nu_branch"></select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('addUserModal')">Cancel</button>
+      <button class="btn btn-green" onclick="addUser()">Create User</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── DELETE CONFIRMATION MODAL (admin) ─── -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal-box">
+    <h3>⚠ Delete record</h3>
+    <p style="color:var(--gray-500);font-size:0.88rem;margin:6px 0 14px">
+      This cannot be undone. The deletion is recorded in the activity log with
+      your name, the reason, and a full copy of the record.
+    </p>
+    <div class="reconcile-panel warn" style="display:block;margin-bottom:14px" id="deleteTarget"></div>
+    <div class="form-field">
+      <label>Reason <span style="color:var(--red-500)">*</span></label>
+      <input type="text" id="deleteReason" placeholder="e.g. duplicate entry, recorded in error">
+      <span class="hint">At least 3 characters. Stored in the log.</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDelete()">Delete permanently</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── CHANGE MY PASSWORD MODAL (any signed-in user) ─── -->
+<div class="modal-overlay" id="changePasswordModal">
+  <div class="modal-box">
+    <h3>Change my password</h3>
+    <p style="color:var(--gray-500);font-size:0.88rem;margin:6px 0 14px">
+      You will stay signed in on this device.
+    </p>
+    <div class="form-field">
+      <label>New password <span style="color:var(--red-500)">*</span></label>
+      <input type="password" id="cp_new" placeholder="At least 8 characters" autocomplete="new-password">
+    </div>
+    <div class="form-field">
+      <label>Confirm new password <span style="color:var(--red-500)">*</span></label>
+      <input type="password" id="cp_confirm" placeholder="Type it again" autocomplete="new-password">
+    </div>
+    <div id="cp_strength" class="reconcile-panel"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('changePasswordModal')">Cancel</button>
+      <button class="btn btn-green" onclick="submitOwnPasswordChange()">Change password</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── ADMIN PASSWORD RESET MODAL ─── -->
+<div class="modal-overlay" id="resetPasswordModal">
+  <div class="modal-box">
+    <h3>Reset password</h3>
+    <div class="reconcile-panel warn" style="display:block;margin-bottom:14px" id="rp_target"></div>
+    <p style="color:var(--gray-500);font-size:0.88rem;margin:0 0 14px">
+      Give them this password in person. They will be made to choose their own
+      the next time they sign in, so you will not know their live password.
+      The reset is recorded in the activity log under your name.
+    </p>
+    <div class="form-field">
+      <label>Temporary password <span style="color:var(--red-500)">*</span></label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="rp_new" placeholder="At least 8 characters" style="flex:1" autocomplete="off">
+        <button class="btn btn-outline btn-sm" type="button" onclick="suggestPassword()">Suggest</button>
+      </div>
+      <span class="hint">Shown as plain text on purpose — you need to read it out.</span>
+    </div>
+    <div class="form-field">
+      <label>Note</label>
+      <input type="text" id="rp_note" placeholder="e.g. forgot password, phoned in">
+      <span class="hint">Optional. Stored in the log.</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('resetPasswordModal')">Cancel</button>
+      <button class="btn btn-danger" onclick="submitAdminReset()">Reset password</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── FORCED PASSWORD CHANGE (after an admin reset) ─── -->
+<div id="forceChangeScreen">
+  <div class="login-card">
+    <div class="login-logo">
+      <img src="kerya_maize_logo.png" alt="Kerya Maize" class="login-logo-icon">
+      <div>
+        <h1>KERYA MAIZE</h1>
+        <span>Choose a new password</span>
+      </div>
+    </div>
+    <p class="login-subtitle" id="fc_who">Your password was reset by an administrator.</p>
+    <div id="fc_error" class="login-error"></div>
+    <div class="form-group">
+      <label>New password</label>
+      <input type="password" id="fc_new" placeholder="At least 8 characters" autocomplete="new-password">
+    </div>
+    <div class="form-group">
+      <label>Confirm new password</label>
+      <input type="password" id="fc_confirm" placeholder="Type it again" autocomplete="new-password">
+    </div>
+    <button class="btn-primary" onclick="submitForcedChange()">Set password and continue →</button>
+    <button class="btn btn-outline" style="width:100%;margin-top:10px" onclick="logoutUser()">Sign out instead</button>
+  </div>
+</div>
+
+<!-- ─── TOAST CONTAINER ─── -->
+<div id="toastContainer"></div>
+  <script src="script.js"></script>
+</body>
+</html>
