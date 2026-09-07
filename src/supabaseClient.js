@@ -7,8 +7,8 @@
 //   Supabase Dashboard → Project Settings → API
 // ============================================================
 
-const SUPABASE_URL      = 'https://tcdkgnfuxssxevcpttum.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRjZGtnbmZ1eHNzeGV2Y3B0dHVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2MTIxMzgsImV4cCI6MjA4OTE4ODEzOH0.5VZjeV77bIRShFVoEgHXQHC1gFnHgBpEJYU05--cUmQ';
+const SUPABASE_URL      = 'https://haqlwuzowcdaavrjixhw.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhhcWx3dXpvd2NkYWF2cmppeGh3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3OTkzMTgsImV4cCI6MjEwNDM3NTMxOH0.nBlXPCOcssR4HqHeFnTXcGc-CwD-_nVRuCRmVMpoHmo';
 
 // window.supabase is provided by the CDN script
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
