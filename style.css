@@ -129,6 +129,14 @@
     /* NOTE: the .demo-accounts / .demo-pill "click to fill" login styles
        were removed along with the demo-credential buttons they belonged to.
        Never reintroduce one-click credential fills in a production build. */
+    .login-help {
+      margin-top: 16px;
+      text-align: center;
+      font-size: 0.82rem;
+      color: var(--gray-500);
+      line-height: 1.5;
+    }
+
     .login-error { background: var(--red-100); color: var(--red-500); padding: 10px 14px; border-radius: 8px; font-size: 0.87rem; margin-bottom: 16px; display: none; }
 
     /* ═══════════════════════════════

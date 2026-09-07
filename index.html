@@ -45,6 +45,14 @@
       <input type="password" id="loginPassword" placeholder="Enter password">
     </div>
     <button class="btn-primary" onclick="loginUser(document.getElementById('loginUsername').value.trim(), document.getElementById('loginPassword').value)">Sign In →</button>
+
+    <!-- No self-service reset: these accounts use usernames dressed as
+         emails (staffmain@kerya.com), so Supabase's reset email would
+         have nowhere real to go. Recovery is via an administrator, who
+         issues a temporary password the user must then replace. -->
+    <p class="login-help">
+      Forgotten your password? Ask an administrator to reset it for you.
+    </p>
   </div>
 </div>
 
