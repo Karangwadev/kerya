@@ -176,8 +176,13 @@ function populateBranchSelectors() {
   fill('s_branch',     all);
   fill('f_branch',     producing);
   fill('p_branch',     producing);
-  fill('t_fromBranch', all);
+  // A branch-scoped user can only ever dispatch from their own branch —
+  // RLS enforces from_branch = get_my_branch(). Offering the full list
+  // made the form claim it was sending from Main while the code used
+  // their own branch. Admins and managers span branches, so they choose.
+  fill('t_fromBranch', spansAllBranches() ? all : [currentUser.branch]);
   fill('t_toBranch',   all);
+  syncTransferDestinations();
   fill('rpt_branch',   all,  [{ value: 'all', label: 'All Branches' }]);
   fill('nu_branch',    all,  [{ value: 'All', label: 'All Branches' }]);
 }
@@ -750,6 +755,30 @@ async function loadSalesView() {
 // actually arrived, which may be fewer sacks, and only then does its
 // stock rise. The gap is reported as a variance rather than quietly
 // disappearing.
+
+function spansAllBranches() {
+  return currentUser.branch === 'All';
+}
+
+/**
+ * A branch cannot transfer to itself, so the sender is removed from the
+ * destination list. Called whenever FROM changes.
+ */
+function syncTransferDestinations() {
+  const from = transferFrom();
+  const to   = document.getElementById('t_toBranch');
+  if (!to) return;
+  const previous = to.value;
+  const options = branchNames().filter(n => n !== from);
+  to.innerHTML = options.map(n => `<option value="${n}">${n}</option>`).join('')
+    || '<option value="">No other branch to send to</option>';
+  if (options.includes(previous)) to.value = previous;
+}
+
+function onTransferFromChange() {
+  syncTransferDestinations();
+  onTransferSizeChange();
+}
 
 function transferFrom() {
   if (currentUser.branch !== 'All') return currentUser.branch;
