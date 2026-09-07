@@ -276,6 +276,56 @@ function deleteCell(entity, id, label) {
 }
 
 // ═══════════════════════════════════════════════════════
+// PHONE NUMBERS
+// ═══════════════════════════════════════════════════════
+// The two sides of the business differ: a farmer can arrive with maize
+// and no phone, but a customer we sell to always has one. So the number
+// is optional on purchases and required on sales — see migration 006,
+// which enforces the same rule in the database.
+//
+// Where a number IS given it must be a plausible Rwandan mobile, so a
+// slipped digit is caught now rather than when someone tries to ring it.
+
+/** Digits only, so punctuation and spacing never matter. */
+function phoneDigits(raw) {
+  return String(raw || '').replace(/[^0-9]/g, '');
+}
+
+/**
+ * Two rules, because only one country's shorthand can be interpreted:
+ *
+ *   Written with a leading + - treated as international and checked
+ *   only for plausible length. Rusizi is on the DRC border, so a
+ *   Congolese or Burundian customer is ordinary business.
+ *
+ *   Written without a + - local shorthand, and must be a Rwandan
+ *   mobile: optional 250, optional trunk 0, then 7 and eight digits.
+ */
+function isValidPhone(raw) {
+  const s = String(raw || '').trim();
+  const d = phoneDigits(s);
+  if (s.startsWith('+')) return /^[0-9]{8,15}$/.test(d);   // E.164 length
+  return /^(250)?0?7[0-9]{8}$/.test(d);
+}
+
+/**
+ * One stored shape per number, so the same person reads the same way
+ * everywhere. Rwandan numbers get readable grouping; foreign ones stay
+ * as +digits, since grouping conventions differ by country and guessing
+ * would only mangle them.
+ */
+function normalisePhone(raw) {
+  const s = String(raw || '').trim();
+  const d = phoneDigits(s);
+  const rw = d.match(/^(?:250)?0?(7[0-9]{8})$/);
+  if (rw) {
+    const l = rw[1];
+    return `+250 ${l.slice(0,3)} ${l.slice(3,6)} ${l.slice(6)}`;
+  }
+  return d ? '+' + d : '';
+}
+
+// ═══════════════════════════════════════════════════════
 // PURCHASE
 // ═══════════════════════════════════════════════════════
 // Everything is bought, weighed and priced by the kilo — there is no
@@ -302,8 +352,14 @@ function updatePurchasePreview() {
 }
 
 async function addPurchase() {
-  const phone = document.getElementById('f_supplierPhone').value.trim();
-  if (!phone) { showToast('Supplier phone is required!', 'error'); return; }
+  // Optional here: a supplier may genuinely have no phone. Forcing one
+  // would only push staff into inventing a number.
+  const phoneRaw = document.getElementById('f_supplierPhone').value.trim();
+  if (phoneRaw && !isValidPhone(phoneRaw)) {
+    showToast('Check that number - use 0788 123 456 for Rwanda, or start with + and the country code', 'error');
+    return;
+  }
+  const phone = phoneRaw ? normalisePhone(phoneRaw) : null;
 
   const qty   = parseFloat(document.getElementById('f_quantity').value) || 0;
   const price = parseFloat(document.getElementById('f_price').value) || 0;
@@ -352,7 +408,7 @@ async function loadPurchaseView() {
     tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--gray-500);padding:32px">No purchase records yet</td></tr>`;
   } else {
     tbody.innerHTML = data.map(r => `<tr>
-      <td>${r.supplier || '—'}</td><td>${r.phone}</td><td>${r.tin || '—'}</td>
+      <td>${r.supplier || '—'}</td><td>${r.phone || '-'}</td><td>${r.tin || '—'}</td>
       <td>${(r.qty || 0).toLocaleString()}</td>
       <td>${(r.price || 0).toLocaleString()}</td>
       <td>${(r.dirt || 0).toLocaleString()}</td>
@@ -669,8 +725,14 @@ function updateSalePreview() {
 }
 
 async function addSale() {
-  const phone = document.getElementById('s_phone').value.trim();
-  if (!phone) { showToast('Customer phone is required!', 'error'); return; }
+  // Optional here too: a walk-in paying cash may not leave a number,
+  // and a mandatory field would only invite a placeholder.
+  const phoneRaw = document.getElementById('s_phone').value.trim();
+  if (phoneRaw && !isValidPhone(phoneRaw)) {
+    showToast('Check that number - use 0788 123 456 for Rwanda, or start with + and the country code', 'error');
+    return;
+  }
+  const phone = phoneRaw ? normalisePhone(phoneRaw) : null;
 
   const f = readSaleForm();
   const customer = document.getElementById('s_customer').value.trim();
@@ -726,7 +788,7 @@ async function loadSalesView() {
     tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--gray-500);padding:32px">No sales records yet</td></tr>`;
   } else {
     tbody.innerHTML = data.map(r => `<tr>
-      <td>${r.customer || '—'}</td><td>${r.phone}</td>
+      <td>${r.customer || '—'}</td><td>${r.phone || '—'}</td>
       <td><span class="badge badge-amber">${r.product}</span></td>
       <td>${r.sackCount ? `${r.sackCount} × ${r.sizeKg}kg` : '—'}</td>
       <td>${(r.qty || 0).toLocaleString()}</td>
@@ -816,66 +878,150 @@ async function onTransferSizeChange() {
     sacks === null ? '—' : `${sacks.toLocaleString()} sacks at ${from}`;
 }
 
+// The load being built up before the dispatch is recorded. One entry
+// per product + sack size; adding the same one twice adds to it rather
+// than making a second line, matching what the database stores.
+let transferLines = [];
+
+function addTransferLine() {
+  const product = document.getElementById('t_product').value;
+  const sizeKg  = parseInt(document.getElementById('t_sackSize').value) || 0;
+  const sacks   = parseInt(document.getElementById('t_sacks').value) || 0;
+
+  if (!sizeKg)   { showToast('Choose a sack size', 'error'); return; }
+  if (sacks <= 0){ showToast('Enter how many sacks', 'error'); return; }
+
+  const existing = transferLines.find(l => l.product === product && l.sizeKg === sizeKg);
+  if (existing) existing.sacks += sacks;
+  else transferLines.push({ product, sizeKg, sacks });
+
+  document.getElementById('t_sacks').value = '';
+  renderTransferLines();
+}
+
+function removeTransferLine(product, sizeKg) {
+  transferLines = transferLines.filter(l => !(l.product === product && l.sizeKg === sizeKg));
+  renderTransferLines();
+}
+
+function clearTransferLines() {
+  transferLines = [];
+  renderTransferLines();
+}
+
+function renderTransferLines() {
+  const tbody = document.getElementById('transferLines');
+  const panel = document.getElementById('t_loadSummary');
+
+  if (!transferLines.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--gray-500);padding:20px">
+      Nothing on the truck yet - add a line above</td></tr>`;
+    panel.className = 'reconcile-panel';
+    panel.textContent = '';
+    return;
+  }
+
+  const sorted = [...transferLines].sort((a,b) =>
+    a.product.localeCompare(b.product) || b.sizeKg - a.sizeKg);
+
+  tbody.innerHTML = sorted.map(l => `<tr>
+    <td><span class="badge ${l.product === 'Semoule' ? 'badge-green' : 'badge-amber'}">${l.product}</span></td>
+    <td>${l.sizeKg} kg</td>
+    <td><strong>${l.sacks}</strong></td>
+    <td>${(l.sacks * l.sizeKg).toLocaleString()} kg</td>
+    <td><button class="btn btn-sm btn-danger"
+                onclick="removeTransferLine('${l.product}', ${l.sizeKg})">Remove</button></td>
+  </tr>`).join('');
+
+  const sacks = transferLines.reduce((n,l) => n + l.sacks, 0);
+  const kg    = transferLines.reduce((n,l) => n + l.sacks * l.sizeKg, 0);
+  panel.className = 'reconcile-panel ok';
+  panel.style.display = 'block';
+  panel.textContent = `${transferLines.length} line${transferLines.length===1?'':'s'} - `
+    + `${sacks} sacks, ${kg.toLocaleString()} kg on this truck.`;
+}
+
 async function addTransfer() {
-  const product    = document.getElementById('t_product').value;
-  const sizeKg     = parseInt(document.getElementById('t_sackSize').value) || 0;
-  const sacksSent  = parseInt(document.getElementById('t_sacks').value) || 0;
   const fromBranch = transferFrom();
   const toBranch   = document.getElementById('t_toBranch').value;
 
-  if (!sizeKg)        { showToast('Choose a sack size!', 'error'); return; }
-  if (sacksSent <= 0) { showToast('Sacks to send must be greater than zero!', 'error'); return; }
+  if (!transferLines.length) { showToast('Add at least one line to the load', 'error'); return; }
+  if (!toBranch)             { showToast('Choose where it is going', 'error'); return; }
   if (fromBranch === toBranch) {
     showToast('A branch cannot transfer stock to itself!', 'error');
     return;
   }
 
-  const available = await DB.stock.sacksInStock(fromBranch, product, sizeKg);
-  if (available !== null && sacksSent > available) {
-    showToast(`Not enough ${product} ${sizeKg}kg sacks at ${fromBranch}: only ${available} in stock`, 'error');
+  const plate = document.getElementById('t_plate').value.trim().toUpperCase();
+  if (plate && !/^[A-Z0-9][A-Z0-9 \/-]{1,14}$/.test(plate)) {
+    showToast('Check the plate - letters, numbers, spaces and dashes only', 'error');
     return;
   }
 
+  // Pre-flight per sack size, on the TOTAL for that size. create_transfer()
+  // is the real guard; this just says which line is short before submitting.
+  for (const line of transferLines) {
+    const have = await DB.stock.sacksInStock(fromBranch, line.product, line.sizeKg);
+    if (have !== null && line.sacks > have) {
+      showToast(`Not enough ${line.product} ${line.sizeKg}kg sacks at ${fromBranch}: only ${have} in stock`, 'error');
+      return;
+    }
+  }
+
   const saved = await DB.transfers.insert({
-    product, sizeKg, sacksSent, fromBranch, toBranch,
+    fromBranch, toBranch, plate,
     note: document.getElementById('t_note').value.trim(),
     dispatchedAt: document.getElementById('t_time').value,
+    items: transferLines,
   });
   if (!saved) return;
 
+  const sacks = transferLines.reduce((n,l) => n + l.sacks, 0);
   await logActivity(`Stock dispatched to ${toBranch}`,
-    `${sacksSent} × ${sizeKg}kg ${product}`, fromBranch);
-  showToast(`🚚 Dispatch recorded — awaiting ${toBranch} confirmation`, 'success');
+    `${saved.reference}: ${sacks} sacks across ${transferLines.length} line(s)`
+      + (plate ? ` on ${plate}` : ''), fromBranch);
+  showToast(`${saved.reference} recorded - awaiting ${toBranch} confirmation`, 'success');
 
-  document.getElementById('t_sacks').value = '';
+  clearTransferLines();
+  document.getElementById('t_plate').value = '';
   document.getElementById('t_note').value  = '';
   await onTransferSizeChange();
   await loadTransfersView();
 }
 
-async function confirmTransfer(id, sacksSent, toBranch) {
-  const input = document.getElementById('conf_' + id);
-  const received = parseInt(input?.value);
+async function confirmTransfer(id) {
+  const t = (await DB.transfers.getPending()).find(x => x.id === id)
+         || (await DB.transfers.getAll()).find(x => x.id === id);
+  if (!t) { showToast('Dispatch not found', 'error'); return; }
 
-  if (isNaN(received) || received < 0) {
-    showToast('Enter how many sacks actually arrived', 'error');
-    return;
-  }
-  if (received > sacksSent) {
-    showToast(`Cannot receive more than the ${sacksSent} sacks that were sent`, 'error');
-    return;
+  // One count per line, so a shortfall is recorded against the thing
+  // that was actually short rather than the note as a whole.
+  const received = [];
+  for (const item of t.items) {
+    const input = document.getElementById(`conf_${item.id}`);
+    const n = parseInt(input?.value);
+    if (isNaN(n) || n < 0) {
+      showToast(`Enter how many ${item.sizeKg}kg ${item.product} sacks arrived`, 'error');
+      return;
+    }
+    if (n > item.sent) {
+      showToast(`Cannot receive more than the ${item.sent} ${item.sizeKg}kg ${item.product} sacks sent`, 'error');
+      return;
+    }
+    received.push({ itemId: item.id, sacks: n });
   }
 
   if (!await DB.transfers.confirm(id, received)) return;
 
-  const variance = sacksSent - received;
+  const sent  = t.totalSent;
+  const got   = received.reduce((n, r) => n + r.sacks, 0);
+  const short = sent - got;
   await logActivity('Transfer confirmed',
-    `${received} of ${sacksSent} sacks received`
-      + (variance ? ` — ${variance} short` : ''),
-    toBranch);
-  showToast(variance
-    ? `✓ Confirmed — ${variance} sack(s) short, recorded as a variance`
-    : '✓ Confirmed — all sacks received', variance ? 'info' : 'success');
+    `${t.reference}: ${got} of ${sent} sacks received` + (short ? ` - ${short} short` : ''),
+    t.toBranch);
+  showToast(short
+    ? `${t.reference} confirmed - ${short} sack(s) short, recorded as a variance`
+    : `${t.reference} confirmed - all sacks received`, short ? 'info' : 'success');
 
   await loadTransfersView();
 }
@@ -883,36 +1029,47 @@ async function confirmTransfer(id, sacksSent, toBranch) {
 async function loadTransfersView() {
   const dispatchCard = document.getElementById('dispatchCard');
   if (dispatchCard) dispatchCard.style.display = canDispatch() ? 'block' : 'none';
+  renderTransferLines();
 
   const [pending, all] = await Promise.all([
     DB.transfers.getPending(),
     DB.transfers.getAll(),
   ]);
 
-  // ── Awaiting confirmation ──
+  // Awaiting confirmation: a header row per dispatch, then its lines,
+  // so one truck reads as one delivery note rather than several transfers.
   const pendingBody = document.getElementById('pendingTransfers');
   if (!pending.length) {
-    pendingBody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--gray-500);padding:32px">Nothing awaiting confirmation</td></tr>`;
+    pendingBody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--gray-500);padding:32px">Nothing awaiting confirmation</td></tr>`;
   } else {
-    pendingBody.innerHTML = pending.map(t => `<tr>
-      <td>${formatDate(t.dispatchedAt)}</td>
-      <td>${t.fromBranch} → <strong>${t.toBranch}</strong></td>
-      <td><span class="badge ${t.product === 'Semoule' ? 'badge-green' : 'badge-amber'}">${t.product}</span></td>
-      <td>${t.sizeKg} kg</td>
-      <td><strong>${t.sacksSent}</strong></td>
-      <td>${t.note || '—'}</td>
-      <td>${canConfirm(t) ? `
-        <div style="display:flex;gap:6px;align-items:center">
-          <input type="number" id="conf_${t.id}" class="inline-select" style="width:82px"
-                 min="0" max="${t.sacksSent}" step="1" value="${t.sacksSent}"
-                 title="Sacks actually received">
-          <button class="btn btn-sm btn-green"
-                  onclick="confirmTransfer('${t.id}', ${t.sacksSent}, '${t.toBranch}')">Confirm</button>
-        </div>` : `<span style="color:var(--gray-500);font-size:0.8rem">Awaiting ${t.toBranch}</span>`}</td>
-    </tr>`).join('');
+    pendingBody.innerHTML = pending.map(t => {
+      const mine = canConfirm(t);
+      const head = `<tr style="background:var(--gray-100)">
+        <td><strong>${t.reference}</strong><br><small>${formatDate(t.dispatchedAt)}</small></td>
+        <td>${t.fromBranch} &rarr; <strong>${t.toBranch}</strong></td>
+        <td colspan="2">${t.plate ? t.plate : ''}${t.note ? ' &middot; ' + t.note : ''}</td>
+        <td><strong>${t.totalSent}</strong> sacks</td>
+        <td>${mine
+          ? `<button class="btn btn-sm btn-green" onclick="confirmTransfer('${t.id}')">Confirm all lines</button>`
+          : `<span style="color:var(--gray-500);font-size:0.8rem">Awaiting ${t.toBranch}</span>`}</td>
+      </tr>`;
+      const lines = t.items.map(i => `<tr>
+        <td></td>
+        <td><span class="badge ${i.product === 'Semoule' ? 'badge-green' : 'badge-amber'}">${i.product}</span></td>
+        <td>${i.sizeKg} kg</td>
+        <td>${i.sent} sent</td>
+        <td colspan="2">${mine
+          ? `<div style="display:flex;gap:6px;align-items:center">
+               <input type="number" id="conf_${i.id}" class="inline-select" style="width:82px"
+                      min="0" max="${i.sent}" step="1" value="${i.sent}" title="Sacks that arrived">
+               <small style="color:var(--gray-500)">arrived</small>
+             </div>`
+          : `<span style="color:var(--gray-500);font-size:0.8rem">${(i.sent * i.sizeKg).toLocaleString()} kg</span>`}</td>
+      </tr>`).join('');
+      return head + lines;
+    }).join('');
   }
 
-  // ── History ──
   const historyBody = document.getElementById('transferHistory');
   if (!all.length) {
     historyBody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--gray-500);padding:32px">No transfers yet</td></tr>`;
@@ -920,21 +1077,20 @@ async function loadTransfersView() {
     historyBody.innerHTML = all.map(t => {
       const badge = t.status === 'confirmed' ? 'badge-green'
                   : t.status === 'cancelled' ? 'badge-red' : 'badge-amber';
-      const varianceCell = t.variance === null ? '—'
+      const varianceCell = t.variance === null ? '&mdash;'
         : t.variance === 0 ? '<span class="badge badge-green">0</span>'
-        : `<span class="badge badge-red">−${t.variance}</span>`;
+        : `<span class="badge badge-red">-${t.variance}</span>`;
       return `<tr>
+        <td><strong>${t.reference}</strong></td>
         <td>${formatDate(t.dispatchedAt)}</td>
-        <td>${t.fromBranch} → ${t.toBranch}</td>
-        <td>${t.product}</td>
-        <td>${t.sizeKg} kg</td>
-        <td>${t.sacksSent}</td>
-        <td>${t.sacksReceived === null ? '—' : t.sacksReceived}</td>
+        <td>${t.fromBranch} &rarr; ${t.toBranch}</td>
+        <td>${t.summary || '&mdash;'}</td>
+        <td>${t.totalSent}</td>
+        <td>${t.totalReceived === null ? '&mdash;' : t.totalReceived}</td>
         <td>${varianceCell}</td>
+        <td>${t.plate || '&mdash;'}</td>
         <td><span class="badge ${badge}">${t.status}</span></td>
-        <td>${t.confirmedAt ? formatDate(t.confirmedAt) : '—'}</td>
-        ${deleteCell('transfer', t.id,
-          `${t.sacksSent} × ${t.sizeKg}kg ${t.product}, ${t.fromBranch} → ${t.toBranch} (${t.status})`)}
+        ${deleteCell('transfer', t.id, `${t.reference}: ${t.summary}`)}
       </tr>`;
     }).join('');
   }
@@ -1375,7 +1531,7 @@ async function loadUsersView() {
   // enforces this regardless, but there's no point showing a control that
   // is going to be rejected. Nobody may edit their own row here; that
   // would be the lock-out path the trigger refuses anyway.
-  const isAdmin = currentUser.role === 'admin';
+  // (isAdmin() is the shared helper - do not shadow it with a local.)
 
   const opts = (values, selected, labels) => values.map(v =>
     `<option value="${v}"${v === selected ? ' selected' : ''}>${labels?.[v] || v}</option>`
@@ -1383,7 +1539,7 @@ async function loadUsersView() {
 
   tbody.innerHTML = users.map(u => {
     const self     = u.id === currentUser.id;
-    const editable = isAdmin && !self;
+    const editable = isAdmin() && !self;
     return `
     <tr>
       <td>${u.name}${self ? ' <span style="color:var(--gray-500);font-size:0.78rem">(you)</span>' : ''}</td>

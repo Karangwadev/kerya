@@ -4,23 +4,14 @@ Read this before putting the system in front of real staff.
 
 ---
 
-## 0. Open question for the owners
+## 0. Open questions for the owners
 
-**Should the system stop you milling more maize than is in stock?**
+Three decisions the system is waiting on — **see section 14** for the detail:
 
-It currently does — `check_production_stock()` caps a production run at the
-cleaned maize available at Main. You asked to leave this and be reminded, so:
-this is the reminder.
-
-If the owners want milling uncapped, it is a one-line change — drop the trigger
-and nothing else moves:
-
-```sql
-DROP TRIGGER trg_check_production_stock ON public.productions;
-```
-
-The trade-off: uncapped, cleaned maize stock can go negative and the inventory
-figure becomes advisory rather than a record of what is in the store.
+1. **Missing sacks in transit** — what happens when 2 of 20 do not arrive?
+2. **Selling currency** — should a border branch sell in USD or Congolese francs?
+3. **The processing cap** — should milling be capped at available stock?
+   (It currently is. Dropping `trg_check_production_stock` removes the cap.)
 
 ---
 
@@ -33,6 +24,10 @@ Run these in order in **Supabase Dashboard → SQL Editor**:
 3. `supabase/migrations/003_dynamic_branches.sql`
 4. `supabase/migrations/004_admin_delete_and_logging.sql`
 5. `supabase/migrations/005_password_management.sql`
+6. `supabase/migrations/006_phone_rules.sql`
+7. `supabase/migrations/007_international_phones_and_vehicle.sql`
+8. `supabase/migrations/008_optional_sale_phone.sql`
+9. `supabase/migrations/009_multi_item_dispatch.sql` — **run once only**
 
 Migration 002 rebuilds the product model around how the plant actually works
 (see section 5). Read its **STEP 0** first — it converts existing rows rather
@@ -145,16 +140,34 @@ Rebuilt to match how the plant actually works, from the branch users' feedback.
 
 ### How transfers work
 
+A dispatch is a **delivery note** (migration 009): one trip carrying many lines.
+
+```
+TRF-0001   Main → Rusizi   RAD 123 A   Driver Eric
+  Ordinaire  50 kg   20 sacks
+  Semoule    25 kg   30 sacks
+  Semoule     5 kg   40 sacks
+```
+
 Two steps, deliberately:
 
-1. **Main dispatches.** The sacks leave Main's stock immediately.
-2. **Rusizi confirms** how many actually arrived — which may be fewer.
-   Only then do they enter Rusizi's stock.
+1. **The sender dispatches.** The sacks leave its stock immediately.
+2. **The receiver confirms**, line by line, how many actually arrived — which
+   may be fewer. Only then do they enter the receiving branch's stock.
 
 Sacks in flight belong to neither branch, and the inventory screen says so.
-Where fewer arrive than were sent, the shortfall is recorded as a **variance**
-on the transfer rather than quietly disappearing. Rusizi cannot confirm more
-sacks than were sent, and cannot edit what Main recorded as dispatched.
+A shortfall is recorded as a **variance on the line it happened on**, so you
+know which product went missing rather than just that the note was short. The
+receiver cannot confirm more sacks than were sent, and cannot edit what the
+sender recorded as dispatched.
+
+Stock is checked on the **total per sack size across the whole note**, not per
+line: two lines of 40 against 70 in stock is 80 requested, and is refused.
+
+**No conflict-resolution flow exists yet.** A variance is detected, recorded and
+visible — but the missing sacks then leave the books entirely: nobody accepts
+the loss, the sender cannot contest the receiver's count, and there is no route
+to correct it if the sacks turn up the next day. See "Open questions".
 
 ### Assumptions to confirm
 
@@ -409,3 +422,82 @@ API without actually changing their password, since the database cannot verify
 that an Auth password change happened. The consequence is only that they skip a
 prompt on an account they are already signed into, so it is not worth the
 complexity of closing — but it is not airtight, and is recorded here as such.
+
+---
+
+## 12. Phone numbers (migrations 006–008)
+
+**Optional on both sides.** A farmer may arrive with maize and no phone; a
+walk-in customer may pay cash and leave no number. A mandatory field would only
+push staff into typing a placeholder, which is worse than an honest blank. NULL
+means none given — never an empty string, so "no phone" has one representation.
+
+Where a number IS given, the rule turns on whether it starts with `+`:
+
+| Written | Treated as | Checked for |
+|---|---|---|
+| `+243 991 234 567` | International | Plausible length (E.164, 8–15 digits) |
+| `0788 123 456` | Local shorthand | Must be a Rwandan mobile |
+
+Rusizi sits on the DRC border, so Congolese and Burundian customers are ordinary
+business, not errors. Only Rwanda's shorthand can be interpreted, so a foreign
+number typed **without** its `+` is refused rather than guessed at.
+
+Rwandan numbers are stored as `+250 788 123 456`; foreign ones keep their own
+digits (`+243991234567`), since grouping conventions differ by country and
+guessing would mangle them.
+
+Enforced by CHECK constraints on both tables, so a tampered client cannot
+bypass it. Landlines (`025…`) are deliberately refused — widen the pattern in
+006 if a supplier ever gives one.
+
+---
+
+## 13. Multi-item dispatches (migration 009)
+
+Until 009 a transfer was one product, one sack size, one count. A lorry with
+three different loads had to be entered as three transfers, each confirmed
+separately, with the plate retyped each time. The arithmetic was right, but the
+record did not say that one truck made one trip.
+
+| Table | Holds |
+|---|---|
+| `transfers` | the trip — reference, from, to, plate, note, date, status |
+| `transfer_items` | the load — one line per product and sack size |
+
+Each dispatch carries a reference (`TRF-0001`) so staff can name it on the phone
+rather than describe it. The truck plate is optional and carries **no
+country-specific pattern** — lorries cross from the DRC on Congolese plates, and
+refusing those would be the same mistake as refusing foreign phone numbers.
+
+Two bugs were found and fixed while testing this against a real database, both
+of which only appear on execution:
+
+* **Duplicate lines lost stock.** Entering 40 then another 40 of the same sack
+  passed a check for 80 but stored only 40 — so 40 sacks would have left the
+  sending branch unrecorded. One aggregate now drives both the check and the
+  insert, so what is validated is exactly what is written.
+* **The refusal message lied.** It reported stock *after* the pending rows were
+  inserted, producing "−929 in stock". Stock is now checked before anything is
+  written.
+
+---
+
+## 14. Open questions for the owners
+
+Three decisions the system is waiting on. Each is written to be easy to change
+once answered.
+
+1. **Missing sacks in transit.** When 2 of 20 do not arrive, what happens? The
+   variance is recorded, but the sacks then leave the books — nobody accepts the
+   loss, the sender cannot contest the count, and there is no route to correct it
+   if they turn up later. The right design depends on what the branches already
+   do in practice.
+
+2. **Selling currency.** Should a border branch sell in USD or Congolese francs?
+   If so, the thing to settle is whether each sale also records its RWF value —
+   without that, revenue cannot be totalled across currencies.
+
+3. **The processing cap.** Should milling be capped at available stock? It
+   currently is. Uncapping is one line, but cleaned maize can then go negative
+   and inventory becomes advisory rather than a record.

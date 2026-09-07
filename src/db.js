@@ -176,23 +176,40 @@ function mapProductionRow(row) {
 }
 
 function mapTransferRow(row) {
+  // A dispatch is a delivery note: the trip, plus one line per product
+  // and sack size. Variance is per line, so a shortfall is recorded
+  // against the thing that was actually short.
+  const items = (row.transfer_items || []).map(i => ({
+    id:       i.id,
+    product:  i.product,
+    sizeKg:   i.size_kg,
+    sent:     i.sacks_sent,
+    received: i.sacks_received,
+    variance: i.sacks_received === null ? null : i.sacks_sent - i.sacks_received,
+    kg:       i.sacks_sent * i.size_kg,
+  })).sort((a, b) => a.product.localeCompare(b.product) || b.sizeKg - a.sizeKg);
+
   return {
-    id:            row.id,
-    product:       row.product,
-    sizeKg:        row.size_kg,
-    fromBranch:    row.from_branch,
-    toBranch:      row.to_branch,
-    sacksSent:     row.sacks_sent,
-    sacksReceived: row.sacks_received,
-    status:        row.status,
-    note:          row.note,
-    dispatchedAt:  row.dispatched_at,
-    dispatchedBy:  row.dispatched_by,
-    confirmedAt:   row.confirmed_at,
-    confirmedBy:   row.confirmed_by,
-    variance:      row.sacks_received === null
+    id:           row.id,
+    reference:    row.reference,
+    fromBranch:   row.from_branch,
+    toBranch:     row.to_branch,
+    plate:        row.vehicle_plate,
+    note:         row.note,
+    status:       row.status,
+    dispatchedAt: row.dispatched_at,
+    dispatchedBy: row.dispatched_by,
+    confirmedAt:  row.confirmed_at,
+    confirmedBy:  row.confirmed_by,
+    items,
+    totalSent:     items.reduce((n, i) => n + i.sent, 0),
+    totalReceived: items.some(i => i.received === null)
                      ? null
-                     : row.sacks_sent - row.sacks_received,
+                     : items.reduce((n, i) => n + i.received, 0),
+    variance:      items.some(i => i.received === null)
+                     ? null
+                     : items.reduce((n, i) => n + (i.sent - i.received), 0),
+    summary: items.map(i => `${i.sent} × ${i.sizeKg}kg ${i.product}`).join(', '),
   };
 }
 
@@ -351,7 +368,8 @@ const DB = {
           .from('purchases')
           .insert({
             supplier:       record.supplier ?? null,
-            phone:          record.phone,
+            // NULL, never '' - "no phone given" gets one representation.
+            phone:          record.phone || null,
             tin:            record.tin ?? null,
             qty_kg:         record.qty,
             price_per_unit: record.price,
@@ -461,7 +479,7 @@ const DB = {
 
         const payload = {
           customer:  record.customer ?? null,
-          phone:     record.phone,
+          phone:     record.phone || null,
           product:   record.product,
           branch:    record.branch,
           sale_time: new Date(record.time).toISOString(),
@@ -505,11 +523,13 @@ const DB = {
 
   transfers: {
 
+    // Every read pulls the lines with the trip, so a dispatch is always
+    // a complete delivery note rather than a header needing a second call.
     async getAll() {
       try {
         const { data, error } = await window.supabaseClient
           .from('transfers')
-          .select('*')
+          .select('*, transfer_items(*)')
           .order('dispatched_at', { ascending: false });
         if (error) throw error;
         return (data || []).map(mapTransferRow);
@@ -523,7 +543,7 @@ const DB = {
       try {
         const { data, error } = await window.supabaseClient
           .from('transfers')
-          .select('*')
+          .select('*, transfer_items(*)')
           .eq('status', 'pending')
           .order('dispatched_at', { ascending: true });
         if (error) throw error;
@@ -534,25 +554,30 @@ const DB = {
       }
     },
 
-    /** Dispatch. Deducts from the sending branch's stock immediately. */
+    /**
+     * insert({ fromBranch, toBranch, plate, note, dispatchedAt, items })
+     *
+     * items: [{ product, sizeKg, sacks }, ...] - one truck, many loads.
+     *
+     * Goes through create_transfer() so the whole note is written in one
+     * transaction, and so stock is checked on the TOTAL per sack size:
+     * two lines of 40 against 70 in stock is 80 requested and must fail,
+     * which per-line checking would miss.
+     */
     async insert(record) {
       try {
-        const { data, error } = await window.supabaseClient
-          .from('transfers')
-          .insert({
-            product:       record.product,
-            size_kg:       record.sizeKg,
-            from_branch:   record.fromBranch,
-            to_branch:     record.toBranch,
-            sacks_sent:    record.sacksSent,
-            note:          record.note || null,
-            dispatched_at: new Date(record.dispatchedAt).toISOString(),
-            status:        'pending',
-          })
-          .select()
-          .single();
+        const { data, error } = await window.supabaseClient.rpc('create_transfer', {
+          p_from_branch:   record.fromBranch,
+          p_to_branch:     record.toBranch,
+          p_plate:         record.plate || null,
+          p_note:          record.note || null,
+          p_dispatched_at: new Date(record.dispatchedAt).toISOString(),
+          p_items:         (record.items || []).map(i => ({
+                             product: i.product, size_kg: i.sizeKg, sacks: i.sacks,
+                           })),
+        });
         if (error) throw error;
-        return mapTransferRow(data);
+        return data;
       } catch (err) {
         showToast(friendlyError(err, 'Error recording dispatch'), 'error');
         return null;
@@ -560,20 +585,20 @@ const DB = {
     },
 
     /**
-     * Rusizi confirms receipt. sacksReceived may be lower than sent —
-     * that is the whole point of the two-step flow. confirmed_at and
-     * confirmed_by are stamped by the guard_transfer_update() trigger.
+     * confirm(id, received)
+     * received: [{ itemId, sacks }, ...] - what actually arrived, per line.
+     * A line left out counts as nothing arrived, not as all of it.
      */
-    async confirm(id, sacksReceived) {
+    async confirm(id, received) {
       try {
-        const { error } = await window.supabaseClient
-          .from('transfers')
-          .update({ sacks_received: sacksReceived, status: 'confirmed' })
-          .eq('id', id);
+        const { error } = await window.supabaseClient.rpc('confirm_transfer', {
+          p_transfer_id: id,
+          p_received:    (received || []).map(r => ({ item_id: r.itemId, sacks: r.sacks })),
+        });
         if (error) throw error;
         return true;
       } catch (err) {
-        showToast(friendlyError(err, 'Error confirming transfer'), 'error');
+        showToast(friendlyError(err, 'Error confirming dispatch'), 'error');
         return false;
       }
     },

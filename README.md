@@ -31,16 +31,26 @@ supabase/migrations/        incremental changes — run in numeric order
 6. Run `supabase/migrations/003_dynamic_branches.sql`
 7. Run `supabase/migrations/004_admin_delete_and_logging.sql`
 8. Run `supabase/migrations/005_password_management.sql`
-9. Deploy the password-reset function (optional but recommended):
+9. Run `supabase/migrations/006_phone_rules.sql`
+10. Run `supabase/migrations/007_international_phones_and_vehicle.sql`
+11. Run `supabase/migrations/008_optional_sale_phone.sql`
+12. Run `supabase/migrations/009_multi_item_dispatch.sql` **(once only)**
+13. Deploy the password-reset function (optional but recommended):
    `supabase functions deploy admin-reset-password` — see
    [supabase/functions/admin-reset-password/README.md](supabase/functions/admin-reset-password/README.md)
-8. Read **[SECURITY.md](SECURITY.md)** and complete the manual steps —
+14. Read **[SECURITY.md](SECURITY.md)** and complete the manual steps —
    rotating the seeded passwords and disabling public signup
 
-Steps 4 to 7 are not optional. 001 adds stock validation, an atomic production
-insert and an unforgeable audit trail; 002 builds the product model the plant
-actually runs on; 003 turns branches into data so a new one can be opened
-without a schema change; 004 makes deletion admin-only, logged and stock-safe.
+None of the migrations are optional. In short: **001** adds stock validation, an
+atomic production insert and an unforgeable audit trail; **002** builds the
+product model the plant actually runs on; **003** turns branches into data so a
+new one can be opened without a schema change; **004** makes deletion admin-only,
+logged and stock-safe; **005** adds password management; **006–008** settle the
+phone rules; **009** turns a dispatch into a delivery note carrying many lines.
+
+`002` and `009` are **forward-only** — they drop columns they also read, so a
+second run fails on the missing column. That is expected, not a fault. The rest
+are safe to re-run.
 
 ## How the business model maps to the data
 
@@ -53,9 +63,18 @@ without a schema change; 004 makes deletion admin-only, logged and stock-safe.
 * Semoule and Ordinaire are stocked and sold **as sacks**: Semoule 25/10/5kg,
   Ordinaire 50/25kg. Bran and Cleaned Maize are sold by weight.
 * Prices are entered **per sale**, because they move.
-* **A depot sells only what has been transferred to it.** The sending branch
-  dispatches, the receiving branch confirms what actually arrived, and any
-  shortfall is recorded as a variance.
+* **Phone numbers are optional on both sides.** A farmer may arrive with maize
+  and no phone; a walk-in customer may pay cash and leave no number. Where one
+  IS given it is checked: Rwandan shorthand (`0788 123 456`), or any
+  international number written with its country code (`+243 …`), since Rusizi
+  sits on the DRC border.
+* **A depot sells only what has been transferred to it.** A dispatch is a
+  **delivery note**: one trip (from, to, truck plate, driver, date) carrying
+  many **lines** — one per product and sack size. A lorry taking 30 × 25kg
+  Semoule, 20 × 50kg Ordinaire and 40 × 5kg Semoule is one dispatch with three
+  lines, not three transfers. Each note gets a reference (`TRF-0001`) so it can
+  be named on the phone. The receiving branch confirms line by line, and any
+  shortfall is recorded against the line it happened on.
 
 ## Branches
 
