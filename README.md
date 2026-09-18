@@ -35,10 +35,11 @@ supabase/migrations/        incremental changes — run in numeric order
 10. Run `supabase/migrations/007_international_phones_and_vehicle.sql`
 11. Run `supabase/migrations/008_optional_sale_phone.sql`
 12. Run `supabase/migrations/009_multi_item_dispatch.sql` **(once only)**
-13. Deploy the password-reset function (optional but recommended):
+13. Run `supabase/migrations/010_purchase_cost_on_gross_weight.sql`
+14. Deploy the password-reset function (optional but recommended):
    `supabase functions deploy admin-reset-password` — see
    [supabase/functions/admin-reset-password/README.md](supabase/functions/admin-reset-password/README.md)
-14. Read **[SECURITY.md](SECURITY.md)** and complete the manual steps —
+15. Read **[SECURITY.md](SECURITY.md)** and complete the manual steps —
    rotating the seeded passwords and disabling public signup
 
 None of the migrations are optional. In short: **001** adds stock validation, an
@@ -46,7 +47,8 @@ atomic production insert and an unforgeable audit trail; **002** builds the
 product model the plant actually runs on; **003** turns branches into data so a
 new one can be opened without a schema change; **004** makes deletion admin-only,
 logged and stock-safe; **005** adds password management; **006–008** settle the
-phone rules; **009** turns a dispatch into a delivery note carrying many lines.
+phone rules; **009** turns a dispatch into a delivery note carrying many lines;
+**010** costs purchases on the full delivered weight.
 
 `002` and `009` are **forward-only** — they drop columns they also read, so a
 second run fails on the missing column. That is expected, not a fault. The rest
@@ -54,8 +56,9 @@ are safe to re-run.
 
 ## How the business model maps to the data
 
-* Maize is **bought in kg** at Main. Quantity minus waste is **cleaned maize**,
-  which is either milled or sold as-is.
+* Maize is **bought in kg** at Main and **paid for on the full delivered weight**,
+  waste included. Quantity minus waste is **cleaned maize**, which is either
+  milled or sold as-is — so each usable kilo costs more than the price paid.
 * Milling produces **either Semoule or Ordinaire**, never both in one run.
   * **Semoule** has a processing rate (68% by default, switchable). The
     remainder comes out as **bran**.
@@ -90,6 +93,20 @@ Menus, product lists, branch pickers, stock and report filters are all derived
 from that list, so a new branch appears everywhere with the right capabilities.
 Branches are never deleted — closing one stops new entries while keeping its
 history.
+
+## Forecasting
+
+The Analytics screen projects forward from recent trading:
+
+* **Revenue forecast** — a trend line through recent daily sales, carried
+  forward 7, 14 or 30 days, with a likely range. Per branch or overall.
+* **Stock runway** — at the recent rate of use, how many days each item lasts
+  and when it runs out. Counts sales, dispatches to other branches, and — for
+  cleaned maize — milling, so it doubles as a "when to buy maize" signal.
+
+Both stay silent until there is enough history (two weeks for revenue, one for
+runway) rather than guessing. They carry the recent trend forward and know
+nothing of harvest seasons, so treat them as a guide.
 
 ## Reports
 

@@ -345,10 +345,24 @@ function purchaseBranch() {
 }
 
 function updatePurchasePreview() {
-  const qty  = parseFloat(document.getElementById('f_quantity').value) || 0;
-  const dirt = parseFloat(document.getElementById('f_dirtRemoved').value) || 0;
-  const el   = document.getElementById('f_finalPreview');
-  el.value = qty > 0 ? (qty - dirt).toLocaleString() + ' kg' : '—';
+  const qty   = parseFloat(document.getElementById('f_quantity').value) || 0;
+  const dirt  = parseFloat(document.getElementById('f_dirtRemoved').value) || 0;
+  const price = parseFloat(document.getElementById('f_price').value) || 0;
+  const clean = qty - dirt;
+  document.getElementById('f_finalPreview').value =
+    qty > 0 ? clean.toLocaleString() + ' kg' : '-';
+
+  // The supplier is paid for the full weight, waste included, so the
+  // real cost of each usable kilo is higher than the price paid.
+  const cost = qty * price;
+  const costEl = document.getElementById('f_costPreview');
+  const hint   = document.getElementById('f_costHint');
+  if (costEl) costEl.value = cost > 0 ? 'RWF ' + cost.toLocaleString() : '-';
+  if (hint) {
+    hint.textContent = (cost > 0 && clean > 0)
+      ? `${qty.toLocaleString()} kg x ${price.toLocaleString()} - effective cost ${Math.round(cost / clean).toLocaleString()} RWF per cleaned kg`
+      : 'Full weight x price - waste is still paid for';
+  }
 }
 
 async function addPurchase() {
@@ -380,7 +394,10 @@ async function addPurchase() {
     phone,
     tin: document.getElementById('f_supplierTIN').value.trim(),
     qty, price, dirt, finalQty,
-    total: finalQty * price,
+    // Paid on everything delivered, waste included: the dirt is removed
+    // after purchase but it was still bought. The database recomputes this
+    // anyway (migration 010) - this value is only a courtesy.
+    total: qty * price,
     branch,
     entryTime: document.getElementById('f_entryTime').value,
   });
@@ -842,6 +859,13 @@ function onTransferFromChange() {
   onTransferSizeChange();
 }
 
+// True if this dispatch is one the current user should see.
+function involvesMyBranch(t) {
+  return currentUser.branch === 'All'
+      || t.fromBranch === currentUser.branch
+      || t.toBranch   === currentUser.branch;
+}
+
 function transferFrom() {
   if (currentUser.branch !== 'All') return currentUser.branch;
   return document.getElementById('t_fromBranch')?.value || branchNames()[0];
@@ -1031,10 +1055,15 @@ async function loadTransfersView() {
   if (dispatchCard) dispatchCard.style.display = canDispatch() ? 'block' : 'none';
   renderTransferLines();
 
-  const [pending, all] = await Promise.all([
+  const [pendingAll, allAll] = await Promise.all([
     DB.transfers.getPending(),
     DB.transfers.getAll(),
   ]);
+  // Branch staff only see dispatches to or from their own branch - a
+  // Main-to-Karongi truck is none of Rusizi's business. Admins and
+  // managers oversee every route.
+  const pending = pendingAll.filter(involvesMyBranch);
+  const all     = allAll.filter(involvesMyBranch);
 
   // Awaiting confirmation: a header row per dispatch, then its lines,
   // so one truck reads as one delivery note rather than several transfers.
@@ -1327,8 +1356,17 @@ async function loadBranchesView() {
 // ═══════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════
+// A sales-only branch (like Rusizi) never buys or mills, so production
+// figures there are permanently zero. It gets cards about what it
+// actually does: selling, holding stock, and confirming arrivals.
+function isDepotUser() {
+  return currentUser.branch !== 'All' && !branchCanProduce(currentUser.branch);
+}
+
 async function loadDashboard() {
   const branch = currentUser.branch;
+  if (isDepotUser()) return loadDepotDashboard(branch);
+
   const [purchases, productions, sales] = await Promise.all([
     DB.purchases.getAll(branch),
     DB.productions.getAll(branch),
@@ -1364,17 +1402,83 @@ async function loadDashboard() {
     </tr>
   `).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--gray-500);padding:32px">No activity yet</td></tr>`;
 
+  document.getElementById('dashChart2Title').textContent = '🏭 Production Summary';
   renderSalesChart(sales);
   renderProdChart(productions);
+}
+
+async function loadDepotDashboard(branch) {
+  const [sales, stock, pending] = await Promise.all([
+    DB.sales.getAll(branch),
+    DB.stock.get(branch),
+    DB.transfers.getPending(),
+  ]);
+
+  const today    = new Date().toDateString();
+  const totalRev = sales.reduce((s, r) => s + (r.total || 0), 0);
+  const todayRev = sales.filter(r => new Date(r.time).toDateString() === today)
+                        .reduce((s, r) => s + (r.total || 0), 0);
+  const sackLines = [];
+  SACKED_PRODUCTS.forEach(p => (SACK_SIZES[p] || []).forEach(size => {
+    const n = stock?.sacks?.[p]?.[size] ?? 0;
+    if (n > 0) sackLines.push({ label: `${p} ${size}kg`, n });
+  }));
+  const sacksHeld = sackLines.reduce((s, l) => s + l.n, 0);
+  const toConfirm = pending.filter(t => t.toBranch === branch);
+
+  document.getElementById('dashGreeting').textContent = `Good day, ${currentUser.name.split(' ')[0]} 👋`;
+  document.getElementById('dashSubtitle').textContent =
+    `${ROLE_LABELS[currentUser.role]} · ${branch} Branch`;
+
+  document.getElementById('dashStats').innerHTML = `
+    <div class="stat-card green"><div class="label">Total Revenue</div><div class="value">RWF ${(totalRev/1000).toFixed(1)}K</div><div class="sub">All time</div><div class="icon-bg">💰</div></div>
+    <div class="stat-card blue"><div class="label">Sold Today</div><div class="value">RWF ${todayRev.toLocaleString()}</div><div class="icon-bg">🧾</div></div>
+    <div class="stat-card amber"><div class="label">Sacks in Stock</div><div class="value">${sacksHeld.toLocaleString()}</div><div class="sub">${sackLines.length} product size(s)</div><div class="icon-bg">📦</div></div>
+    <div class="stat-card ${toConfirm.length ? 'red' : 'green'}"><div class="label">Awaiting Your Confirmation</div>
+      <div class="value">${toConfirm.length}</div>
+      <div class="sub">${toConfirm.length ? 'Open Transfers to confirm' : 'Nothing to confirm'}</div><div class="icon-bg">🚚</div></div>
+  `;
+
+  const logs = await DB.activityLog.getRecent(10, branch);
+  document.getElementById('recentActivityBody').innerHTML = logs.map(l => `
+    <tr>
+      <td>${formatDate(l.time)}</td>
+      <td>${l.action}</td>
+      <td>${l.details || ''}</td>
+      <td><span class="badge badge-green">${l.branch}</span></td>
+      <td>${l.byName || l.by || '—'}</td>
+    </tr>
+  `).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--gray-500);padding:32px">No activity yet</td></tr>`;
+
+  // The second chart shows what the branch holds rather than what it made.
+  document.getElementById('dashChart2Title').textContent = '📦 Stock on Hand';
+  renderSalesChart(sales);
+  makeChart('prodChart', {
+    type: 'doughnut',
+    data: {
+      labels: sackLines.length ? sackLines.map(l => l.label) : ['No stock'],
+      datasets: [{
+        data: sackLines.length ? sackLines.map(l => l.n) : [1],
+        backgroundColor: sackLines.length
+          ? ['#4caf50', '#81c784', '#c8e6c9', '#f59e0b', '#fcd34d'].slice(0, sackLines.length)
+          : ['#e5e7eb'],
+        borderWidth: 0,
+      }],
+    },
+    options: { ...CHART_DEFAULTS, cutout: '65%' },
+  });
 }
 
 // ═══════════════════════════════════════════════════════
 // ANALYTICS
 // ═══════════════════════════════════════════════════════
 async function loadAnalytics() {
-  const [purchases, sales] = await Promise.all([
+  const [purchases, sales, productions, transfers, stock] = await Promise.all([
     DB.purchases.getAll('All'),
     DB.sales.getAll('All'),
+    DB.productions.getAll('All'),
+    DB.transfers.getAll(),
+    DB.stock.getVisible(),
   ]);
 
   const names    = branchNames({ includeInactive: true });
@@ -1412,6 +1516,264 @@ async function loadAnalytics() {
 
   renderBranchRevenueChart(names, names.map(n => revenue[n] || 0));
   renderProductChart(sales);
+  // Cached so changing the forecast's branch or horizon redraws it
+  // without going back to the database.
+  forecastData = { purchases, sales, productions, transfers, stock };
+  const fcBranch = document.getElementById('fc_branch');
+  const keep = fcBranch.value;
+  fcBranch.innerHTML = '<option value="all">All branches</option>'
+    + branchNames().map(n => `<option value="${n}">${n}</option>`).join('');
+  if ([...fcBranch.options].some(o => o.value === keep)) fcBranch.value = keep;
+
+  renderForecast();
+  renderRunway();
+}
+
+// ═══════════════════════════════════════════════════════
+// FORECASTING
+// ═══════════════════════════════════════════════════════
+// Two projections, both deliberately simple:
+//
+//   Revenue forecast - a straight trend line through recent daily
+//   sales, carried forward, with a likely range from how much the days
+//   scatter around it.
+//
+//   Stock runway - at the recent rate of use, how many days each item
+//   lasts. The most actionable of the two: it says when to mill, when
+//   to send stock, and when to buy maize.
+//
+// Nothing cleverer, on purpose. A few months of data cannot support a
+// seasonal model, and a forecast nobody can explain is one nobody
+// should act on. Both refuse to speak until there is enough history.
+
+const DAY_MS            = 86400000;
+const FORECAST_MIN_DAYS = 14;   // a trend needs at least two weeks
+const RUNWAY_MIN_DAYS   = 7;    // a rate of use needs at least one
+const FORECAST_WINDOW   = 60;   // days the trend is fitted over
+const RUNWAY_WINDOW     = 30;   // days the rate of use is averaged over
+
+let forecastData = null;
+
+function startOfDay(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+function dayKey(d) {
+  const x = startOfDay(d);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+}
+function daysBetween(a, b) { return Math.round((startOfDay(b) - startOfDay(a)) / DAY_MS); }
+function shortDate(d) { return new Date(d).toLocaleDateString('en-RW', { month: 'short', day: 'numeric' }); }
+
+/** How many days the business has been recording anything, inclusive of today. */
+function tradingAgeDays(d) {
+  const times = [
+    ...d.sales.map(r => r.time),
+    ...d.purchases.map(r => r.entryTime),
+    ...d.productions.map(r => r.time),
+    ...d.transfers.map(t => t.dispatchedAt),
+  ].filter(Boolean).map(t => new Date(t).getTime());
+  if (!times.length) return 0;
+  return daysBetween(Math.min(...times), new Date()) + 1;
+}
+
+/** Least-squares line through ys at x = 0, 1, 2 ..., plus how far points scatter from it. */
+function linearFit(ys) {
+  const n  = ys.length;
+  const xm = (n - 1) / 2;
+  const ym = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0;
+  ys.forEach((y, x) => { sxy += (x - xm) * (y - ym); sxx += (x - xm) ** 2; });
+  const slope     = sxx ? sxy / sxx : 0;
+  const intercept = ym - slope * xm;
+  const sse   = ys.reduce((a, y, x) => a + (y - (intercept + slope * x)) ** 2, 0);
+  const sigma = n > 2 ? Math.sqrt(sse / (n - 2)) : 0;
+  return { slope, intercept, sigma, mean: ym };
+}
+
+function clearForecastChart() {
+  makeChart('forecastChart', { type: 'bar', data: { labels: [], datasets: [] }, options: CHART_DEFAULTS });
+}
+
+function renderForecast() {
+  if (!forecastData) return;
+  const branch  = document.getElementById('fc_branch').value || 'all';
+  const horizon = parseInt(document.getElementById('fc_horizon').value) || 30;
+  const statsEl = document.getElementById('forecastStats');
+  const note    = document.getElementById('forecastNote');
+  const age     = tradingAgeDays(forecastData);
+  const where   = branch === 'all' ? 'all branches' : branch;
+
+  if (age < FORECAST_MIN_DAYS) {
+    statsEl.innerHTML = '';
+    clearForecastChart();
+    note.className = 'reconcile-panel warn';
+    note.textContent = `A revenue forecast needs at least ${FORECAST_MIN_DAYS} days of trading history `
+      + `- there ${age === 1 ? 'is 1 day' : `are ${age} days`} so far. It will appear on its own `
+      + `once there is enough to fit a trend to.`;
+    return;
+  }
+
+  // Every calendar day in the window, including days with no sales.
+  // Skipping empty days would make the business look busier than it is.
+  const histDays = Math.min(FORECAST_WINDOW, age);
+  const today = startOfDay(new Date());
+  const days  = Array.from({ length: histDays },
+    (_, i) => new Date(today.getTime() - (histDays - 1 - i) * DAY_MS));
+  const byDay = {};
+  forecastData.sales
+    .filter(r => branch === 'all' || r.branch === branch)
+    .forEach(r => { const k = dayKey(r.time); byDay[k] = (byDay[k] || 0) + (r.total || 0); });
+  const actual = days.map(d => byDay[dayKey(d)] || 0);
+
+  if (!actual.some(v => v > 0)) {
+    statsEl.innerHTML = '';
+    clearForecastChart();
+    note.className = 'reconcile-panel warn';
+    note.textContent = `No sales at ${where} in the last ${histDays} days - nothing to project.`;
+    return;
+  }
+
+  const fit     = linearFit(actual);
+  const future  = Array.from({ length: horizon }, (_, k) => new Date(today.getTime() + (k + 1) * DAY_MS));
+  const trendAt = x => Math.max(0, fit.intercept + fit.slope * x);
+  const projDaily = future.map((_, k) => trendAt(histDays + k));
+  const projected = projDaily.reduce((a, b) => a + b, 0);
+
+  // Roughly an 80% range for a total over `horizon` days, treating each
+  // day's scatter around the trend as independent. Honest about the
+  // uncertainty rather than falsely precise.
+  const spread = 1.28 * fit.sigma * Math.sqrt(horizon);
+  const low  = Math.max(0, projected - spread);
+  const high = projected + spread;
+
+  const weeklyPct   = fit.mean > 0 ? (fit.slope * 7) / fit.mean * 100 : 0;
+  const trendText   = Math.abs(weeklyPct) < 1 ? 'Flat'
+                    : weeklyPct > 0 ? `Up ${weeklyPct.toFixed(1)}% a week`
+                    : `Down ${Math.abs(weeklyPct).toFixed(1)}% a week`;
+  const trendColour = Math.abs(weeklyPct) < 1 ? 'blue' : weeklyPct > 0 ? 'green' : 'red';
+  const rwf = v => 'RWF ' + Math.round(v).toLocaleString();
+
+  statsEl.innerHTML = `
+    <div class="stat-card green"><div class="label">Projected, next ${horizon} days</div>
+      <div class="value">${rwf(projected)}</div><div class="icon-bg">📈</div></div>
+    <div class="stat-card amber"><div class="label">Likely range</div>
+      <div class="value" style="font-size:clamp(0.95rem,0.85rem + 0.8vw,1.25rem)">${rwf(low)} to ${rwf(high)}</div>
+      <div class="icon-bg">↕</div></div>
+    <div class="stat-card ${trendColour}"><div class="label">Trend</div>
+      <div class="value">${trendText}</div><div class="icon-bg">➚</div></div>
+    <div class="stat-card blue"><div class="label">Based on</div>
+      <div class="value">${histDays} days</div>
+      <div class="sub">${rwf(actual.reduce((a, b) => a + b, 0))} sold in that time</div>
+      <div class="icon-bg">🗓</div></div>`;
+
+  const gap = future.map(() => null);
+  makeChart('forecastChart', {
+    type: 'bar',
+    data: {
+      labels: [...days, ...future].map(shortDate),
+      datasets: [
+        { type: 'bar', label: 'Actual revenue', data: [...actual, ...gap],
+          backgroundColor: '#4caf5099', borderRadius: 3, order: 3 },
+        { type: 'line', label: 'Trend', data: [...days.map((_, i) => trendAt(i)), ...gap],
+          borderColor: '#2e7d32', borderWidth: 2, pointRadius: 0, tension: 0, order: 2 },
+        // Starts on the last historical trend point so the two lines join.
+        { type: 'line', label: 'Forecast',
+          data: [...days.map((_, i) => i === histDays - 1 ? trendAt(i) : null), ...projDaily],
+          borderColor: '#f59e0b', borderWidth: 2, borderDash: [6, 4], pointRadius: 0,
+          tension: 0, spanGaps: false, order: 1 },
+      ],
+    },
+    options: { ...CHART_DEFAULTS,
+      scales: { y: { beginAtZero: true, grid: { color: '#f3f4f6' } },
+                x: { grid: { display: false }, ticks: { maxTicksLimit: 12 } } } },
+  });
+
+  note.className = 'reconcile-panel ok';
+  note.textContent = `Based on ${histDays} days of sales at ${where}. This carries the recent trend `
+    + `forward - it does not know about harvest seasons, price changes or one-off large orders, `
+    + `so treat it as a guide rather than a promise. It steadies as history builds up; after a `
+    + `full year of trading, a seasonal forecast becomes possible.`;
+}
+
+function renderRunway() {
+  if (!forecastData) return;
+  const body = document.getElementById('runwayBody');
+  const note = document.getElementById('runwayNote');
+  const age  = tradingAgeDays(forecastData);
+
+  if (age < RUNWAY_MIN_DAYS) {
+    body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--gray-500);padding:24px">Not enough history yet</td></tr>`;
+    note.className = 'reconcile-panel warn';
+    note.textContent = `Runway needs at least ${RUNWAY_MIN_DAYS} days of trading to measure a rate of use `
+      + `- there ${age === 1 ? 'is 1 day' : `are ${age} days`} so far.`;
+    return;
+  }
+
+  const W = Math.min(RUNWAY_WINDOW, age);
+  const since = startOfDay(new Date()).getTime() - (W - 1) * DAY_MS;
+  const inWindow = t => t && new Date(t).getTime() >= since;
+  const { sales, productions, transfers, stock } = forecastData;
+  const sum = (arr, f) => arr.reduce((a, x) => a + (f(x) || 0), 0);
+
+  const rows = [];
+  Object.entries(stock).forEach(([branch, s]) => {
+    const add = (item, unit, onHand, usedInWindow, isMaize = false) =>
+      rows.push({ branch, item, unit, onHand, perDay: usedInWindow / W, isMaize });
+
+    if (branchCanProduce(branch)) {
+      // Cleaned maize is used up by milling as well as by being sold.
+      const milled = sum(productions.filter(p => p.branch === branch && inWindow(p.time)), p => p.maize);
+      const soldCM = sum(sales.filter(r => r.branch === branch && r.product === 'Cleaned Maize' && inWindow(r.time)), r => r.qty);
+      add('Cleaned Maize', 'kg', s.bulk['Cleaned Maize'] ?? 0, milled + soldCM, true);
+      const soldBran = sum(sales.filter(r => r.branch === branch && r.product === 'Bran' && inWindow(r.time)), r => r.qty);
+      add('Bran', 'kg', s.bulk['Bran'] ?? 0, soldBran);
+    }
+
+    SACKED_PRODUCTS.forEach(product => (SACK_SIZES[product] || []).forEach(size => {
+      // Sacks leave a branch by being sold OR by being sent elsewhere.
+      const sold = sum(sales.filter(r => r.branch === branch && r.product === product
+                                     && r.sizeKg === size && inWindow(r.time)), r => r.sackCount);
+      const sent = sum(transfers.filter(t => t.fromBranch === branch && t.status !== 'cancelled'
+                                           && inWindow(t.dispatchedAt)),
+                       t => sum(t.items.filter(i => i.product === product && i.sizeKg === size), i => i.sent));
+      add(`${product} ${size}kg`, 'sacks', s.sacks?.[product]?.[size] ?? 0, sold + sent);
+    }));
+  });
+
+  const shown = rows
+    .filter(r => r.onHand > 0 || r.perDay > 0)
+    .map(r => ({ ...r, days: r.perDay > 0 ? r.onHand / r.perDay : Infinity }))
+    .sort((a, b) => a.days - b.days);
+
+  if (!shown.length) {
+    body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--gray-500);padding:24px">Nothing in stock and nothing moving</td></tr>`;
+  } else {
+    const today = startOfDay(new Date()).getTime();
+    body.innerHTML = shown.map(r => {
+      let badge, label;
+      if (r.onHand <= 0)       { badge = 'badge-red';   label = 'Out of stock'; }
+      else if (r.perDay === 0) { badge = '';            label = `No movement in ${W} days`; }
+      else if (r.days < 7)     { badge = 'badge-red';   label = r.isMaize ? 'Buy maize now'  : 'Running low'; }
+      else if (r.days < 14)    { badge = 'badge-amber'; label = r.isMaize ? 'Buy maize soon' : 'Watch'; }
+      else                     { badge = 'badge-green'; label = 'OK'; }
+      const perDay = r.unit === 'kg' ? Math.round(r.perDay).toLocaleString() + ' kg'
+                                     : (Math.round(r.perDay * 10) / 10) + ' sacks';
+      const finite = Number.isFinite(r.days);
+      return `<tr>
+        <td>${r.branch}</td>
+        <td><strong>${r.item}</strong></td>
+        <td>${r.onHand.toLocaleString()} ${r.unit}</td>
+        <td>${r.perDay > 0 ? perDay : '&mdash;'}</td>
+        <td><strong>${finite ? Math.floor(r.days) : '&mdash;'}</strong></td>
+        <td>${finite && r.onHand > 0 ? shortDate(today + r.days * DAY_MS) : '&mdash;'}</td>
+        <td>${badge ? `<span class="badge ${badge}">${label}</span>`
+                    : `<span style="color:var(--gray-500);font-size:0.8rem">${label}</span>`}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  note.className = 'reconcile-panel ok';
+  note.textContent = `Rate of use is averaged over the last ${W} days: what was sold, plus what was `
+    + `sent to other branches, plus - for cleaned maize - what was milled. Most urgent first. `
+    + `A branch that trades unevenly will see these figures swing.`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1475,9 +1837,11 @@ async function loadInventory() {
   // Sacks in flight have left the sender but not yet reached the
   // receiver, so they sit in neither branch's stock.
   const note = document.getElementById('transitNote');
-  const pending = await DB.transfers.getPending();
+  // Dispatches are delivery notes with lines (migration 009), so the count
+  // comes from totalSent. Reading the old per-row sacksSent gave "NaN".
+  const pending = (await DB.transfers.getPending()).filter(involvesMyBranch);
   if (pending.length) {
-    const totalSacks = pending.reduce((s, t) => s + t.sacksSent, 0);
+    const totalSacks = pending.reduce((s, t) => s + (t.totalSent || 0), 0);
     const routes = [...new Set(pending.map(t => `${t.fromBranch} → ${t.toBranch}`))].join(', ');
     note.innerHTML = `<div class="reconcile-panel warn" style="display:block">
       ${totalSacks} sack(s) across ${pending.length} dispatch(es) are in transit
@@ -1900,7 +2264,9 @@ async function generateReport() {
       + `Total (Maize and Waste): <strong>${t.gross.toLocaleString()}kg</strong> &nbsp; `
       + `Waste: <strong>${t.waste.toLocaleString()}kg</strong> &nbsp; `
       + `Sub-Total (Maize minus Waste): <strong>${t.net.toLocaleString()}kg</strong> &nbsp; `
-      + `Total Cost: <strong>RWF ${t.cost.toLocaleString()}</strong></p>`;
+      + `Total Cost: <strong>RWF ${t.cost.toLocaleString()}</strong> &nbsp; `
+      + `Waste: <strong>${t.wastePct}%</strong> &nbsp; `
+      + `Cost per cleaned kg: <strong>RWF ${t.costPerCleanKg.toLocaleString()}</strong></p>`;
     html += `<table><tr><th>Supplier</th><th>Total (kg)</th><th>Waste (kg)</th>`
       + `<th>Sub-Total (kg)</th><th>Price/kg</th><th>Amount</th><th>Branch</th><th>Date</th></tr>`;
     purchases.forEach(r => html += `<tr>
@@ -1962,11 +2328,15 @@ async function generateReport() {
 }
 
 function purchaseTotals(purchases) {
+  const gross = purchases.reduce((s, r) => s + (r.qty || 0), 0);       // maize and waste
+  const waste = purchases.reduce((s, r) => s + (r.dirt || 0), 0);
+  const net   = purchases.reduce((s, r) => s + (r.finalQty || 0), 0);  // maize minus waste
+  const cost  = purchases.reduce((s, r) => s + (r.total || 0), 0);     // paid on gross weight
   return {
-    gross: purchases.reduce((s, r) => s + (r.qty || 0), 0),       // maize and waste
-    waste: purchases.reduce((s, r) => s + (r.dirt || 0), 0),
-    net:   purchases.reduce((s, r) => s + (r.finalQty || 0), 0),  // maize minus waste
-    cost:  purchases.reduce((s, r) => s + (r.total || 0), 0),
+    gross, waste, net, cost,
+    // What each usable kilo really cost, since waste is paid for too.
+    costPerCleanKg: net > 0 ? Math.round(cost / net) : 0,
+    wastePct:       gross > 0 ? Math.round(waste / gross * 1000) / 10 : 0,
   };
 }
 
@@ -2042,6 +2412,7 @@ function downloadReportExcel() {
       'Waste kg': t.waste,
       'Sub-Total (Maize minus Waste) kg': t.net,
       'Amount (RWF)': t.cost,
+      'Cost per cleaned kg (RWF)': t.costPerCleanKg,
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Purchases');
   }
@@ -2216,7 +2587,7 @@ function exportTable(tbodyId, filename) {
 document.getElementById('loginPassword')
   .addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 
-['f_quantity', 'f_dirtRemoved'].forEach(id => {
+['f_quantity', 'f_dirtRemoved', 'f_price'].forEach(id => {
   document.getElementById(id).addEventListener('input', updatePurchasePreview);
 });
 ['p_maizeProcessed', 'p_rate'].forEach(id => {

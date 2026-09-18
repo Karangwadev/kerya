@@ -28,6 +28,7 @@ Run these in order in **Supabase Dashboard → SQL Editor**:
 7. `supabase/migrations/007_international_phones_and_vehicle.sql`
 8. `supabase/migrations/008_optional_sale_phone.sql`
 9. `supabase/migrations/009_multi_item_dispatch.sql` — **run once only**
+10. `supabase/migrations/010_purchase_cost_on_gross_weight.sql`
 
 Migration 002 rebuilds the product model around how the plant actually works
 (see section 5). Read its **STEP 0** first — it converts existing rows rather
@@ -501,3 +502,87 @@ once answered.
 3. **The processing cap.** Should milling be capped at available stock? It
    currently is. Uncapping is one line, but cleaned maize can then go negative
    and inventory becomes advisory rather than a record.
+
+---
+
+## 15. Purchase cost (migration 010)
+
+**A supplier is paid for everything delivered, waste included.** 2,000 kg at 400
+RWF with 100 kg of dirt costs **800,000** — not 760,000. The dirt is removed after
+purchase; it was still bought.
+
+The app was computing cost as *cleaned kg × price*, so every purchase understated
+its cost by exactly *waste × price*. Worse, **nothing in the database checked the
+figure** — the browser decided what a purchase cost.
+
+Migration 010:
+
+* **corrects existing purchases**, and writes one `warning` entry per branch to
+  the activity log stating how many changed and by how much, so the change to
+  historical totals is on the record;
+* makes the **database compute the cost** on every insert and update — whatever
+  the app sends is overwritten, including a hand-typed total — backed by a CHECK
+  constraint stating the rule.
+
+The purchase form now shows the amount to pay before saving, and the effective
+cost per cleaned kilo (2,000 kg × 400 ÷ 1,900 kg = **421 RWF**). The purchase
+report shows the same, along with the waste percentage.
+
+**Sales totals are still computed by the app.** The formula there is right
+(sacks × price per sack, or kg × price per kg), so this is hardening rather than
+a bug — but the database does not yet enforce it the way it now does for
+purchases.
+
+---
+
+## 16. Forecasting
+
+Two projections on the Analytics screen, **deliberately simple**. A few months of
+data cannot support a seasonal model, and a forecast nobody can explain is one
+nobody should act on.
+
+**Revenue forecast.** A least-squares trend line through daily sales over the
+last 60 days (or the whole trading history if shorter), carried forward 7, 14 or
+30 days. Every calendar day counts, including days with no sales — skipping them
+would make the business look busier than it is. The likely range is roughly an
+80% interval from how much the days scatter around the trend. Never projects
+below zero.
+
+**Stock runway.** For each item at each branch: stock on hand ÷ average daily
+use over the last 30 days. *Use* means sold, plus sent to other branches, plus —
+for cleaned maize — milled. Most urgent first; under 7 days is red, under 14
+amber. Low cleaned maize reads "Buy maize now / soon".
+
+**Both refuse to guess** without enough history: 14 days for revenue, 7 for
+runway. The screen says so and shows how many days exist so far.
+
+**What they do not know:** harvest seasons (Rwanda's Season A and B move maize
+prices and volumes sharply), price changes, and one-off large orders. After a
+full year of trading, a seasonal model becomes possible.
+
+Verified against hand-worked figures: a perfect line of 100,000 + 5,000·day over
+30 days projects exactly 1,855,000 for the next 7 days at +20.3% a week.
+
+---
+
+## 17. What each role sees
+
+A screen that can only ever show zero is noise, so each role gets what it acts on.
+
+| Who | Dashboard shows |
+|---|---|
+| **Sales-only branch staff** (Rusizi) | Total revenue, sold today, sacks in stock, dispatches awaiting their confirmation — and a *Stock on Hand* chart |
+| **Production-site staff, managers, admin, stakeholders** | Revenue, cleaned maize in, semoule and ordinaire produced — and a *Production Summary* chart |
+
+**Transfers are scoped too.** Branch staff see only dispatches to or from their
+own branch; a Main-to-Karongi truck is none of Rusizi's business. Admins and
+managers see every route. The same applies to the in-transit note on Inventory.
+
+This is presentation only — row-level security still lets any signed-in user
+*read* transfers between other branches through the API. Tightening that is a
+policy change worth making if branches ever need their movements kept private
+from each other.
+
+A bug found in this audit: the Inventory in-transit note read a field that
+migration 009 removed, so it showed **"NaN sacks in transit"** whenever a
+dispatch was pending. Fixed.

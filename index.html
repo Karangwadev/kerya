@@ -114,7 +114,7 @@
           <div class="card-body"><div class="chart-wrap"><canvas id="salesChart"></canvas></div></div>
         </div>
         <div class="card">
-          <div class="card-header"><h3>🏭 Production Summary</h3></div>
+          <div class="card-header"><h3 id="dashChart2Title">🏭 Production Summary</h3></div>
           <div class="card-body"><div class="chart-wrap"><canvas id="prodChart"></canvas></div></div>
         </div>
       </div>
@@ -182,6 +182,7 @@
             <div class="form-field">
               <label>Price per kg (RWF) <span style="color:var(--red-500)">*</span></label>
               <input type="number" id="f_price" placeholder="0" min="0" step="1">
+                <span class="hint">Paid on the full weight delivered, waste included</span>
             </div>
             <div class="form-field">
               <label>Waste / Dirt Removed (kg)</label>
@@ -194,6 +195,12 @@
                      style="background:var(--gray-100);font-weight:600">
               <span class="hint">Quantity minus waste — this is what enters stock</span>
             </div>
+              <div class="form-field">
+                <label>Amount to Pay (RWF)</label>
+                <input type="text" id="f_costPreview" value="-" readonly
+                       style="background:var(--gray-100);font-weight:600">
+                <span class="hint" id="f_costHint">Full weight x price - waste is still paid for</span>
+              </div>
             <!-- Only branches with a mill can buy maize — elsewhere the
                  maize could never be used. Populated from the branches
                  table; hidden entirely when there is only one. -->
@@ -550,6 +557,7 @@
       </div>
       <div class="stat-grid" id="analyticsStats"></div>
 
+
       <!-- Two charts removed as having nothing to say yet:
            "Production Efficiency" repeated the dashboard's Production
            Summary doughnut exactly, and "Weekly Trend" needs months of
@@ -576,6 +584,51 @@
           </div>
         </div>
       </div>
+
+      <!-- Forecasting comes after the figures it is built from. -->
+      <div class="page-header" style="margin-top:12px">
+        <h2>🔮 Forecasting</h2>
+        <p>Projections from recent trading - a guide, not a promise</p>
+      </div>
+      <!-- FORECAST: projections from recent trading, stated with their
+           uncertainty. Deliberately simple - a trend line and a rate of
+           use - because a few months of data cannot support more, and a
+           forecast nobody can explain is one nobody should trust. -->
+      <div class="card">
+        <div class="card-header">
+          <h3>📈 Revenue Forecast</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <select id="fc_branch" class="inline-select" onchange="renderForecast()"></select>
+            <select id="fc_horizon" class="inline-select" onchange="renderForecast()">
+              <option value="7">Next 7 days</option>
+              <option value="14">Next 14 days</option>
+              <option value="30" selected>Next 30 days</option>
+            </select>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="stat-grid" id="forecastStats"></div>
+          <div class="chart-wrap"><canvas id="forecastChart"></canvas></div>
+          <div id="forecastNote" class="reconcile-panel"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>⏳ Stock Runway</h3>
+          <span class="hint" style="margin:0">How long each item lasts at the recent rate of use</span>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Branch</th><th>Item</th><th>In Stock</th><th>Used per Day</th><th>Days Left</th><th>Runs Out</th><th>Status</th></tr></thead>
+              <tbody id="runwayBody"></tbody>
+            </table>
+          </div>
+          <div id="runwayNote" class="reconcile-panel"></div>
+        </div>
+      </div>
+
     </div>
 
     <!-- ──── USERS ADMIN VIEW ──── -->

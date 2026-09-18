@@ -1,7 +1,7 @@
 # Kerya Maize MIS — System Flow & Readiness Report
 
-*Revised 8 September 2026. Covers phone rules, multi-line dispatches, and the
-full run against a real PostgreSQL instance.*
+*Revised 18 September 2026. Adds purchase costing on gross weight and
+forecasting.*
 
 ---
 
@@ -18,7 +18,9 @@ have.
 
 **1. Buying**
 Someone at a production site records a delivery: supplier, gross weight in
-kilos, price per kilo, and how much waste was taken out. A phone number is
+kilos, price per kilo, and how much waste was taken out. **The supplier is paid
+for the full weight** — waste included — and the form shows the amount before
+saving, plus what each usable kilo really cost. A phone number is
 optional — a farmer may not have one. Gross weight minus
 waste is the **cleaned maize**, and that is what enters stock. Everything is in
 kilos; there is no ton option.
@@ -103,7 +105,13 @@ the sidebar. If someone is locked out, an admin resets it to a temporary
 password and reads it out — the person is then **made to choose their own** at
 next sign-in, so the admin never holds a working password.
 
-**9. Watching it**
+**9. Looking ahead**
+The Analytics screen projects revenue forward from recent sales, with a likely
+range, and shows how many days each item's stock will last at the current rate —
+including when to buy maize. Both wait until there is enough history rather than
+guessing.
+
+**10. Watching it**
 Every action is logged: who, what, when, which branch. Admins and managers can
 search that log. Deleting a record is admin-only, needs a written reason, keeps
 a full copy of what was deleted, and is refused outright if it would make the
@@ -169,8 +177,9 @@ then the app will run, look completely normal, and talk to the wrong database.
 **Immediate — you are in this stretch now:**
 
 1. **Repoint `src/supabaseClient.js`** at the new project. Two minutes.
-2. **Run migrations 006 → 009 in order.** 001–005 are already applied to your
-   project. 009 must be run **once only** — it drops columns it also reads.
+2. **Run migration 010.** 001–009 are applied to your project. 010 corrects
+   existing purchase costs and logs the correction, so check the activity log
+   afterwards.
 3. **Create the auth users** in the dashboard, then run `seed.sql`.
 4. **Rotate every password** and **disable public signup**.
 5. **Deploy the Edge Function** for in-app password resets — optional; the
